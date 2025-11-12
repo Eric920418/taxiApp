@@ -1,0 +1,1271 @@
+# 花蓮在地計程車司機端智慧管理系統—工程規格單 v1.1（Kotlin + Jetpack Compose）
+
+> 專案代稱：**HualienTaxiDriver**　更新：**2025-10-20**　作者：產品／工程整合
+
+---
+
+## 0. 版本與重大變更
+
+* **v1.1（本版）**：新增「愛心卡/現金」支付流程、目的地可變更／未知流程、**跳表（實體計程表）為準**的結算機制、**AI 自動接單**（防搶單）、**聊天式主介面**對應的訊息模型；補齊狀態機、資料結構、派單公平性與安全性。
+* v1.0：基礎系統架構、定位／導航、訂單／收入、FCM、語音助理、Background Service。
+
+---
+
+## 1. 專案基本資訊（沿用 + 補充）
+
+* 平台：Android（minSdk 26, targetSdk 36），Jetpack Compose + Kotlin。
+* 主要套件：Material3、Navigation Compose、Lifecycle、DataStore、Google Maps SDK、Fused Location、Firebase（Auth/RTDB/Firestore/FCM/Functions）、WorkManager、TTS/SpeechRecognizer。
+* **非功能性**：啟動 < 1.2s（冷啟），定位回報誤差 RMS < 20m（市區）、Service 存活率 > 99%（可接單時）。
+
+---
+
+## 2. 系統架構
+
+**Layering**
+
+1. Presentation（Compose UI / Chat-first）、2) Domain（UseCases：派單／計費／結算／語音）、3) Data（Repo：Firebase/Maps/Local）、4) Service（Foreground Location、FCM、Speech、WorkManager）、5) Cloud（Functions：派單鎖、狀態驗證、結算審計）
+
+**關鍵流程**
+
+* 乘客 App（Chat UI）→ `orderPool` 建單 → Functions 依演算法鎖定司機 → FCM Offer → 司機端（**AI 自動接單**或手動）→ 導航 → 跳表結算 → 上傳 `FareBreakdown` → 產生 `earnings` 聚合。
+
+---
+
+## 3. 聊天式主介面（Chat-first UX）
+
+**乘客端主軸是聊天室**，司機端同步採「對話執行緒」顯示系統事件（不強迫雙向聊天）。
+
+* **訊息類型**：
+
+  * `System`（派單、到點、逾時、結算）
+  * `AI`（路況/建議、語音轉文字回饋）
+  * `ActionCard`（接單／拒單、大按鈕）
+  * `Form`（目的地確認／變更、支付方式選擇）
+  * `User`（乘客訊息）、`Driver`（司機快捷語）
+* **對話執行緒對應**：一張訂單 = 一個 Thread（`threadId == orderId`）。
+* **駕駛安全**：車速 > 0 時，司機端只允許語音回覆「是／否／到達／開始／結束」，UI 操作上鎖。
+
+---
+
+## 4. 訂單生命週期（有限狀態 + 守衛條件）
+
+```text
+WAITING → OFFERED(driverId, ttl=15s) → ACCEPTED → ARRIVED → ON_TRIP → SETTLING → DONE
+                  ↖ 逾時/拒單：釋放鎖回 WAITING（並將 driverId 加入 exclude 冷卻）
+任何狀態 → CANCELLED(by=driver|passenger|system)
+```
+
+**事件觸發**
+
+* `ACCEPTED`：AI 自動接單或司機語音「接單」/按鈕。
+* `ARRIVED`：GPS 半徑 ≤ 70m 或司機語音「我已到達」。
+* `ON_TRIP`：司機語音「開始計費」或偵測離開上車點 > 150m 並時速 > 5km/h。
+* `SETTLING`：導航完成或司機語音「結束行程」。
+* `DONE`：結算提交（含跳表值）且乘客確認/逾時自動確認。
+* `CANCELLED`：規則與懲罰依政策（見 §10）。
+
+---
+
+## 5. 支付方式與跳表為準（愛心卡／現金）
+
+### 5.1 支付型別
+
+* `paymentType`: `CASH`｜`LOVE_CARD`（愛心卡）｜`OTHER`（擴充：數位支付）
+* **來源**：
+
+  * 乘客端下單前於 Chat 中選擇；若乘客帳號具備「愛心卡資格」標記，預設顯示 `LOVE_CARD`。
+  * 司機端在 `SETTLING` 前可覆核/更正（需理由與審計記錄）。
+
+### 5.2 跳表整合（**以實體計程表為最終計價**）
+
+* **資料來源優先序**：實體跳表（硬體） > 司機輸入（照片/數值） > App 估算（僅顯示預估）。
+* **硬體介接選項**：
+
+  1. **BLE（UART over BLE）**：廠商 SDK / GATT Profile；事件：`START/INCREMENT/STOP/TOTAL`。
+  2. **USB/Serial**：支援 OTG，讀取秒表與總額訊框。
+  3. **無介面**：要求司機於結束時拍攝跳表照片 + 手動輸入總額（OCR 輔助，仍以人工確認為準）。
+* **一致性**：App 的距離/時間只做比對與異常偵測（瞬移/非物理速度），不作為最終收費依據。
+* **愛心卡規則**：在 `LOVE_CARD` 下套用對應補助／折扣政策（以後端參數化 `Tariff` + `SubsidyRule`），並產生 `auditLog`（補助額、依據、版本）。
+
+### 5.3 結算畫面（司機端）
+
+* 顯示：跳表金額（來源標記）、愛心卡補助額、乘客應付額。
+* 司機可±Δ 微調（小額上限），必填理由；全程留存 `auditLog`。
+* 語音播報：「本趟金額 XXX 元，愛心卡補助 YYY 元，請說『送出』或『修改』。」
+
+---
+
+## 6. 目的地類型與變更流程
+
+* `destinationType`: `FIXED`｜`CHANGING`｜`UNKNOWN`。
+
+  * `UNKNOWN`：下單時未填，Chat 提醒「上車後告知司機」，進入 `ON_TRIP` 前需在司機端確認（可留空繼續）。
+  * `CHANGING`：乘客於行程中提出變更（Chat 表單），系統推播至司機端 → 語音/按鈕「接受變更」→ 更新導航與費率評估（跳表仍為準）。
+* 所有變更寫入 `timeline` 與 `auditLog`（含誰提出、何時、差異）。
+
+---
+
+## 7. AI 自動接單（防搶單）
+
+**目標**：司機**空車/可接單**時，由系統自動接受分配，杜絕「手速搶單」。
+
+* `DriverPolicy.autoAccept`: `OFF`｜`EMPTY_ONLY`｜`ALWAYS`（預設 `EMPTY_ONLY`）。
+* 觸發條件：`availability == AVAILABLE` 且 `speed < 5km/h`（安全）且 `lastHeartbeat ≤ 10s`。
+* UI：派單到達時**不顯示搶單按鈕**；以 System 訊息與語音「已自動為您接單」。
+* 例外：司機可在 5 秒內說「拒絕」一次（納入拒單分）；頻繁拒絕會自動降派單權重。
+* 派單演算法維持公平性（§9），自動接單僅改**接單決策端**，不改候選集合與評分機制。
+
+---
+
+## 8. 資料模型（Kotlin）
+
+```kotlin
+enum class OrderStatus { WAITING, OFFERED, ACCEPTED, ARRIVED, ON_TRIP, SETTLING, DONE, CANCELLED }
+
+enum class DriverAvailability { OFFLINE, REST, AVAILABLE, ON_TRIP }
+
+enum class PaymentType { CASH, LOVE_CARD, OTHER }
+
+enum class DestinationType { FIXED, CHANGING, UNKNOWN }
+
+data class GeoPoint(val lat: Double, val lng: Double, val addr: String? = null)
+
+data class SubsidyRule(
+  val code: String,               // e.g. HLN_LOVE_2025Q4
+  val type: String,               // PCT / FIXED / CAP
+  val value: Int,                 // 百分比或金額
+  val cap: Int? = null,           // 上限
+  val version: Int = 1
+)
+
+data class Tariff(
+  val baseFare: Int,
+  val baseDistanceMeters: Int,
+  val perKm: Int,
+  val perMin: Int,
+  val nightSurchargePct: Int? = null,
+  val bookingFee: Int? = null,
+  val roundingTo: Int = 10
+)
+
+data class FareBreakdown(
+  val meterAmount: Int?,          // 來自跳表（權威）
+  val appDistanceMeters: Int,     // App 量測（對帳）
+  val appDurationSeconds: Int,
+  val subsidyApplied: Int = 0,
+  val adjustment: Int = 0,
+  val adjustmentReason: String? = null,
+  val totalPayable: Int           // 乘客應付（含補助後）
+)
+
+data class Order(
+  val orderId: String,
+  val passengerId: String,
+  val driverId: String? = null,
+  val pickup: GeoPoint,
+  val destination: GeoPoint?,
+  val destinationType: DestinationType = DestinationType.FIXED,
+  val paymentType: PaymentType = PaymentType.CASH,
+  val status: OrderStatus = OrderStatus.WAITING,
+  val createdAt: Long = System.currentTimeMillis(),
+  val acceptedAt: Long? = null,
+  val arrivedAt: Long? = null,
+  val startedAt: Long? = null,
+  val completedAt: Long? = null,
+  val cancelledBy: String? = null,             // driver/passenger/system
+  val offerCount: Int = 0,
+  val tariffCode: String = "HLN_DEFAULT_2025",
+  val subsidyRule: SubsidyRule? = null,
+  val fare: FareBreakdown? = null
+)
+
+data class DailyEarning(
+  val date: String,  // yyyymmdd
+  val totalAmount: Int,
+  val trips: Int,
+  val distanceKm: Double,
+  val minutes: Int,
+  val orders: List<String>
+)
+```
+
+---
+
+## 9. 派單演算法（公平 + 可回放）
+
+* 候選：`availability=AVAILABLE`、`lastHeartbeat≤15s`、非 `excludeList`。
+* 評分：
+
+```text
+score = w1*ETA_to_pickup + w2*distance + w3*(-cancelRate) + w4*idleTime
+      + w5*acceptanceScore + w6*zoneBalancePenalty
+```
+
+* 鎖定：Functions 於 RTDB 以 **transaction** 設 `order.lock={driverId, expiresAt=now+15s}`。
+* 重派：逾時/拒絕/偏差過大 → 釋放鎖，`offerCount++`，擴大搜尋半徑。
+* 公平性：連續低單量者提高 `idleTime` 權重；高拒單率者降低 `acceptanceScore`。
+* 決勝：`hash(orderId+driverId)` 做穩定化 tie-break。
+
+---
+
+## 10. 取消與懲罰（政策鉤子）
+
+* 乘客取消：`WAITING/OFFERED` 無懲罰；`ARRIVED` 後可收到點費（Remote Config）。
+* 司機取消：`ACCEPTED` 後記一次「放鴿子」，降派單權重；連 3 次觸發冷卻 N 分鐘。
+* 系統取消：離線 > 3 分鐘或定位異常，釋放訂單並通知乘客。
+
+---
+
+## 11. 前景服務與生命週期
+
+* `LocationService`：登入進入「可接單」即啟動；Android 12+ 使用 `FOREGROUND_SERVICE_LOCATION`；WorkManager 保活；開機自動恢復上次模式。
+* `FcmService`：接收 `OFFER`／`SYSTEM` 訊息 → 產生對話 `ActionCard` 或自動接單。
+* `SpeechService`：按住說話為預設（可選喚醒詞）；提供固定意圖（接單／拒單／到達／開始／結束／重導航／撥打乘客）。
+
+---
+
+## 12. Firebase 結構與 Rules（節選）
+
+```json
+// RTDB 結構（示意）
+{
+  "drivers": {
+    "$uid": {"phone":"","plate":"","availability":"AVAILABLE","lastHeartbeat":0,
+              "location":{"lat":0,"lng":0},"score":0}
+  },
+  "orders": {
+    "$orderId": {"passengerId":"","driverId":null,"pickup":{},"destination":{},
+                  "destinationType":"FIXED","paymentType":"CASH","status":"WAITING",
+                  "lock":{"driverId":null,"expiresAt":0},
+                  "tariffCode":"HLN_DEFAULT_2025","subsidyRule":{},"fare":{}}
+  },
+  "earnings": {"$uid": {"yyyymmdd": {"totalAmount":0,"trips":0,"orders":[]}}}
+}
+```
+
+```javascript
+// Rules（簡化）
+{
+  "rules": {
+    "drivers": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid",
+        "availability": { ".validate": "newData.val() in ['OFFLINE','REST','AVAILABLE','ON_TRIP']" },
+        "location": {
+          ".write": "$uid === auth.uid && !request.resource.data.mock",
+          ".validate": "newData.child('lat').isNumber() && newData.child('lng').isNumber()"
+        }
+      }
+    },
+    "orders": {
+      "$orderId": {
+        ".read": "auth != null",
+        "lock": {
+          ".write": "auth != null",
+          ".validate": "newData.child('driverId').isString() && newData.child('expiresAt').isNumber()"
+        },
+        "status": {
+          ".write": "auth != null && (
+             (newData.val()=='ACCEPTED' && data.val()=='OFFERED' && root.child('orders/'+$orderId+'/lock/driverId').val()==auth.uid) ||
+             (newData.val()=='ARRIVED'  && data.val()=='ACCEPTED' && root.child('orders/'+$orderId+'/driverId').val()==auth.uid) ||
+             (newData.val()=='ON_TRIP'  && data.val()=='ARRIVED'  && root.child('orders/'+$orderId+'/driverId').val()==auth.uid) ||
+             (newData.val()=='SETTLING' && data.val()=='ON_TRIP'  && root.child('orders/'+$orderId+'/driverId').val()==auth.uid) ||
+             (newData.val()=='DONE'     && data.val()=='SETTLING' && root.child('orders/'+$orderId+'/driverId').val()==auth.uid)
+          )"
+        },
+        "paymentType": { ".validate": "newData.val() in ['CASH','LOVE_CARD','OTHER']" },
+        "destinationType": { ".validate": "newData.val() in ['FIXED','CHANGING','UNKNOWN']" }
+      }
+    }
+  }
+}
+```
+
+---
+
+## 13. 目的地/支付 Chat 表單（乘客端）
+
+* **目的地**：`FIXED`（地址/地標自動完成功能）、`UNKNOWN`（提示：上車後告知司機）、`CHANGING`（行程中允許提案變更）。
+* **支付**：`CASH` 或 `LOVE_CARD`（若具資格預設勾選）；在 `SETTLING` 前仍可更改。
+* **系統訊息**：變更將推送司機端，要求語音確認。
+
+---
+
+## 14. 非功能與安全
+
+* **位置偽造**：Mock Location 檢測、加速度/速度一致性、GPS vs Wi-Fi/Cell 填補；可選 Play Integrity API。
+* **隱私**：乘客資料最小化（匿名 ID、遮罩電話），定位保留 24h，結算明細 6–36 個月。
+* **App 保護**：R8 混淆、Root/JB 檢、關閉 Debuggable、簽章驗證、Firebase App Check。
+
+---
+
+## 15. 測試策略
+
+* **單元**：UseCase（派單、狀態機、AI 自接）、Tariff/Subsidy 計算。
+* **整合**：Firebase Emulator（Auth/DB/Functions/FCM）走完整流程；跳表介接以 Fake Adapter 驗證。
+* **UI**：Compose UI Test（聊天、ActionCard、語音錯誤回退）；Macrobenchmark（啟動、列表流暢度）。
+* **場景矩陣**：市區/山區、4G/離線、日/夜、AI 自接／語音拒絕、未知目的地、愛心卡結算。
+
+---
+
+## 16. 接口與適配層
+
+* `MeterAdapter`：`start()`／`stop()`／`onIncrement(value:Int)`／`total(): Int`；實作 `BleMeterAdapter`、`UsbMeterAdapter`、`ManualMeterAdapter`。
+* `ChatFormEngine`：根據 schema 生成 `ActionCard/Form`，回寫 RTDB。
+* `AutoAcceptPolicy`：依 `DriverPolicy` 決策；暴露遙測（自接成功率、拒單率）。
+
+---
+
+## 17. 端到端流程（時序摘要）
+
+1. 乘客 Chat 建單（選支付／目的地，可 `UNKNOWN`）→ `orders/WAITING`。
+2. Functions 評分 → 鎖定 → FCM `OFFER`。
+3. 司機端（AI 自接）→ `ACCEPTED`；導航意圖啟動，定位持續回報。
+4. 到達 → `ARRIVED`；上車 → `ON_TRIP`。
+5. 結束 → 跳表金額讀取/輸入 → 補助/折扣 → `SETTLING` → 乘客確認 → `DONE`。
+6. 寫入 `earnings/{uid}/yyyymmdd` 聚合；Chat Thread 收尾摘要。
+
+---
+
+## 18. 驗收標準（Definition of Done）
+
+* AI 自接：AVAILABLE 狀態下派單到達，5 秒內自動 `ACCEPTED`，成功率 ≥ 99%。
+* 跳表為準：在無硬體情境下，手輸 + 照片 OCR 流程可完成結算；硬體情境下資料可即時同步至結算頁。
+* Chat-first：整個訂單過程可在單一執行緒中被重播（可審計）。
+* 目的地 `UNKNOWN/CHANGING`：流暢完成，審計紀錄完整。
+* 愛心卡補助：依 `SubsidyRule` 正確套用，審計可追溯到規則版本。
+
+---
+
+## 19. 後續工作（Roadmap）
+
+* 乘客端 App（React Native 或 KMP）Chat-first 實作。
+* 與地方跳表設備廠商協定 BLE/USB 資料格式。
+* 數位支付（TWQR、一卡通/悠遊卡介接）與發票。
+* 里程軌跡分析、危駕偵測、區域語音（台語/花蓮腔）、藍牙車載麥克風。
+
+---
+
+## 20. 附錄：對話訊息 Schema（示意）
+
+```json
+{
+  "threads": {
+    "{orderId}": {
+      "messages": [
+        {"type":"System","text":"已自動為您接單","ts":123456},
+        {"type":"ActionCard","action":"ARRIVED_CONFIRM","ttl":30},
+        {"type":"Form","formId":"DEST_CHANGE","fields":[{"name":"addr","type":"place"}]}
+      ]
+    }
+  }
+}
+```
+
+---
+
+> **備註法遵**：本文件不落地具體費率數字；所有補助/折扣以後端參數與地政/交通主管機關最新公布為準，並保留稽核與版本回溯能力。
+
+---
+
+## 21. v1.2 安全／合規與反濫用補充（針對審查意見）
+
+### 21.1 AI 自動接單：防掛機與穩定性
+
+**反掛機（Anti-Idling）**
+
+* 滑動視窗 10 分鐘內需滿足：`minMovingMinutes ≥ 3` 且 `minDisplacement ≥ 300m`；否則暫停 `autoAccept` 15 分鐘（以 Remote Config 可調）。
+* 熱區節流：對指定 geo-fence 熱區，`autoAccept` 採 **配額制**（每 30 分鐘最多 N 單），超過改為人工確認。
+* 速度闕值改為 **複合條件**：`speed_p50 < 5km/h 且 speed_p95 < 15km/h` 才視為靜止。
+
+**Heartbeat 抖動容錯**
+
+* `lastHeartbeat` 容忍 25s（原 10s）；採 **到達時間偏差（arrival skew）** 估算健康度 `health = onTimeCount / window`，低於 0.8 時暫停派單 2 分鐘。
+
+**5 秒拒絕的安全備援**
+
+* 多通道：語音（ASR）＋**實體音量鍵雙擊**（系統層可行）＋藍牙耳機多鍵事件；任一通道在 5 秒內觸發即拒單。
+* ASR 低置信（<0.6）→ 立即回讀：「偵測到『拒絕？』請說**是**」；仍失敗時標記 `softAccept`，允許 3 秒「撤回接單」。
+
+---
+
+### 21.2 跳表為準：驗證與應急
+
+**防弊策略**
+
+* 雙憑證：結束時**必拍照**跳錶（照片 EXIF 應含時間），OCR 讀值與司機輸入比對（差異 > ±20 元需再確認）。
+* 交叉驗證：以 App 里程/時間與 `TariffSnapshot` 估算**合理區間**：`max(±20%, ±60元)`；超過 → `anomalyFlag=true`，進入人工覆核。
+* 多次偏差偵測：以司機 30 日移動窗口 z-score > 2 之單據列警示清單。
+
+**跳表故障應急**
+
+* 切換 `ManualMeterAdapter`：需上傳**起點與終點**跳表照片（若無裝置），並由乘客端輸入一次性 4 位 OTP 確認；每月上限 3 次，超限需客服解鎖。
+
+**爭議處理**
+
+* 乘客在 24 小時內可於 App 按一下鍵提異議 → 狀態 `dispute=PENDING`，自動凍結刪除排程，客服 T+1 工作日內初審，必要時抽查軌跡與照片。
+
+**調整上限（adjustment）**
+
+* Remote Config：`min(±5%, ±80元)`，管理端可分區調整；超限需主管審批（寫入 `auditLog`）。
+
+---
+
+### 21.3 愛心卡（LOVE_CARD）資格與防詐
+
+* **資格驗證**：優先接政府/地方社福 **API（OAuth2／mTLS）**；無 API 時，乘客上傳卡面與身分文件 → OCR + 人工一次性審核，生成 `eligibilityToken{hashId, level, expiresAt}`；每 6 個月複驗。
+* **使用綁定**：每張單補助需乘客端在車上以 **近端驗證**（乘客 App 藍牙/超音波近距離或 OTP）確認在場，防遠端偽刷。
+* **串謀防範**：
+
+  * 乘客賬號風控：同裝置/同卡號短期間多單 → 風險分數上升。
+  * 司機側：月度「應急模式」與「補助比例」異常 → 進入審核名單。
+* **撥付週期**：補助入 **司機錢包**，**月結**（次月第 5 個工作日），失敗自動重試 D+1；>3 次失敗轉人工；行程異議未結清的補助暫緩撥付。
+
+---
+
+### 21.4 Firebase Rules 強化（節選）
+
+```javascript
+{
+  "rules": {
+    "orders": {"$orderId": {
+      "acceptedAt": { 
+        ".validate": "!data.exists() || (newData.val() > data.parent().child('createdAt').val())" },
+      "completedAt": { 
+        ".validate": "!data.exists() || (newData.val() > data.parent().child('startedAt').val())" },
+      "fare": { 
+        ".validate": "newData.child('totalPayable').isNumber() && newData.child('totalPayable').val() >= 60 && newData.child('totalPayable').val() <= 10000" },
+      "pickup": { 
+        ".validate": "newData.child('lat').val() > 23 && newData.child('lat').val() < 24.5 && newData.child('lng').val() > 121 && newData.child('lng').val() < 122.5" },
+      "destination": { 
+        ".validate": "!newData.exists() || (newData.child('lat').val() > 23 && newData.child('lat').val() < 24.5 && newData.child('lng').val() > 121 && newData.child('lng').val() < 122.5)" }
+    }}}
+}
+```
+
+> 複雜邏輯（距離、狀態拓撲合法性、金額與補助聯動）在 **Cloud Functions** 二次驗證。
+
+**Functions 派單鎖的穩健性**
+
+* 所有鎖以 RTDB `transaction` 設置；`FAILED_ABORTED` 指數退避（100ms～2s，抖動）重試最多 6 次。
+* 以 `lock.expiresAt` + **Cloud Scheduler** 每分鐘掃描回收逾期鎖，避免鎖死。
+* 以 `Functions V2 + minInstances=1` 並設定 **region 單一區** 避免跨區時鐘偏差；業務邏輯以 `idempotencyKey=orderId` 保證冪等。
+
+---
+
+### 21.5 離線／弱網機制
+
+* **FCM 失效**：前景時開啟 RTDB `orders/offer_queue/{driverId}` 輪詢通道（5s 間隔）作為備援；背景不輪詢以維持公平。
+* **定位批次**：Room WAL 佇列，每 2–5 秒一筆，離線時最多緩存 500 筆；恢復後批次上傳（50/批）。
+* **結算離線**：`FareBreakdown` + 照片 + OTP 可離線存檔；連線恢復後一次上傳，帶 `clientEventId` 去重。
+* **WorkManager**：`BACKOFF_POLICY_EXPONENTIAL`，初始 10s，最大 30m，重試上限 10 次；網路條件為 `UNMETERED or NOT_ROAMING` 可調。
+
+---
+
+### 21.6 Chat-first UX 細節
+
+* **快捷語（司機）**：
+
+  * 我已到達 / 請您上車 / 我在路上 / 即將抵達 / 路況壅塞 / 可否確認目的地
+* **防騷擾（乘客）**：每 5 分鐘最多 10 則訊息；超量轉為合併訊息；可一鍵靜音。
+* **語音模式**：使用 ASR 指令槽（意圖 + 參數），複雜表單改為 `Form Card`；失敗 3 次自動切換按鍵流程。
+
+---
+
+### 21.7 目的地變更（費用與限制）
+
+* 變更後費用：**跳表自動反映**，App 僅更新目的地供導航與安全記錄；不做額外加價，除非政策另訂（如變更費）。
+* 變更限制：行程中最多 2 次；第 3 次需司機同意。
+* 司機拒絕：維持原路線；乘客可取消但依政策計收到點/起步費（可配置）。
+
+---
+
+### 21.8 ASR（語音）錯誤處理
+
+* 置信度閾值：`reject/accept` ≥ 0.6；低於則回讀確認；連續 3 次失敗回退按鍵。
+* 噪音防誤觸：VAD + 喚醒前置音；行進間僅允許白名單指令。
+* 方言支援：提供台語關鍵詞詞庫；離線模型（可選）於弱網時啟用指令子集。
+
+---
+
+### 21.9 資料模型補強
+
+```kotlin
+data class StatusEvent(
+  val from: OrderStatus,
+  val to: OrderStatus,
+  val by: String,    // uid or system
+  val at: Long,
+  val reason: String? = null
+)
+
+data class FareBreakdown(
+  val meterAmount: Int?,
+  val appDistanceMeters: Int,
+  val appDurationSeconds: Int,
+  val subsidyApplied: Int = 0,
+  val adjustment: Int = 0,
+  val adjustmentReason: String? = null,
+  val totalPayable: Int,
+  val meterSource: String,      // BLE / USB / MANUAL / OCR
+  val photoUrl: String? = null,
+  val gpsTrackHash: String? = null,
+  val tariffSnapshot: Tariff,
+  val timestamp: Long
+)
+
+data class Order(
+  /* 既有欄位略 */
+  val timeline: List<StatusEvent> = emptyList(),
+  val gpsTrack: List<GeoPoint>? = null,
+  val disputeStatus: String? = null, // NONE / PENDING / RESOLVED
+  val version: Int = 2
+)
+
+enum class DriverAvailability {
+  OFFLINE, REST, AVAILABLE, EN_ROUTE_TO_PICKUP, WAITING_FOR_PASSENGER, ON_TRIP
+}
+```
+
+---
+
+### 21.10 個資／法遵與硬體資安
+
+* **刪除權**：乘客/司機可在 App 申請資料刪除；`Cloud Scheduler` 每日觸發 Functions 清除 24h 後的定位；若 `dispute=PENDING` 則暫緩刪除直到結案 + 7 天。
+* **BLE 安全**：要求 LESC（安全連線）+ 製造商序號白名單 + 首次配對需一次性 PIN；所有資料以 app 端 TLS 傳回。
+* **USB 安全**：僅允許已簽章的廠商識別 PID/VID；指令集採 **只讀**；資料包含 CRC 校驗。
+* **SubsidyRule 綁定**：在建立 `SETTLING` 時把 `SubsidyRule.version` 與 `TariffSnapshot` 固化於訂單，後續政策變更不影響已進行中。
+
+---
+
+### 21.11 測試補強
+
+* **異常場景**：GPS>5m、Firebase>10m 斷線、藍牙斷/重連、Functions 逾時、乘客舊版協議。
+* **效能條件**：
+
+  * 測試機：Android 9 / 3GB RAM（低規）與 Android 13 / 6GB（主流）。
+  * 冷啟：不載入地圖、延後初始化 Firebase（lazy）、Service 延遲到進入可接單後。
+  * 熱啟：<= 30 分鐘內返回前景。
+
+---
+
+---
+
+## 22. v1.3 熱區配額、心跳健康度與公平送單
+
+### 22.1 熱區自動接單配額（Quota）
+
+**目標**：抑制熱區「停車掛機」壟斷，同時不犧牲供需彈性。
+
+**資料結構**
+
+```kotlin
+data class QuotaPolicy(
+  val zoneId: String,               // geo-fence ID（Server 定義）
+  val windowMinutes: Int = 30,      // 視窗長度（預設 30 分，Remote Config）
+  val maxOrders: Int,               // 每司機每視窗的自接上限（動態）
+  val resetStrategy: String         // SLIDING / FIXED_WINDOW
+)
+```
+
+**配額計算（Functions，每 5 分鐘）**
+
+* 動態：`maxOrders_driver = clamp(min=1, floor( base + α * (demand / activeDrivers) ), max=3 )`
+
+  * 參數（Remote Config）：`base=1, α=0.5, max=3`
+  * `demand`：近 15 分鐘該 zone 新單數；`activeDrivers`：`availability=AVAILABLE` 且健康度良好。
+* 視窗策略：預設 **FIXED_WINDOW**，半小時對齊（:00–:30、:30–:00）。
+
+  * 邊界處理：29:59 接單只計入當前視窗；新視窗自動歸零。
+  * 需降低邊界利用：提供可切換 **SLIDING**（每單記錄時間戳，計算最近 `windowMinutes` 內的計數）。
+
+**計數與一致性**
+
+* 計數來源：`drivers/{uid}/quota/{zoneId}/{windowKey}`（Firestore）
+* 自接流程：Functions 於鎖定前讀取並 `transaction` 遞增；若達上限 → 改為**手動 Offer**（FCM + RTDB thread ActionCard），並回覆司機語音/訊息：「已達自動接單配額」。
+* UI 指示：首頁顯示「自接配額：2/3（重置 12:30）」；到上限自動關閉 `autoAccept` 切手動。
+
+---
+
+### 22.2 Heartbeat 健康度（Health）
+
+* 取樣視窗：**最近 12 次心跳**（約 2 分鐘，預期間隔 10s）。
+* 準時定義：當前心跳與上一心跳的到達間隔 ≤ **15s** 計為 `onTime`。
+* 指標：`health = onTimeCount / 12`，< **0.8** → 降級：暫停派單 2 分鐘並語音提示；恢復條件：之後連續兩個視窗 `health ≥ 0.9` **或** 司機手動「重新上線」。
+* 實作：`drivers/{uid}/heartbeat{lastAt, interArrivalMs}`；Functions 每分鐘掃描異常，或由 app 端本地即時計算並上報 `health`。
+
+---
+
+### 22.3 送單公平性：RTDB 實時通道
+
+* **禁用輪詢**：改為 Foreground Service 常駐 **RTDB onChildAdded** 監聽 `offer_queue/{driverId}`，FCM 僅做喚醒備援。
+* 背景公平：只要 `availability=AVAILABLE` 則 Service 常駐（法規允許下），不以前/後景區分送單機會。
+
+---
+
+## 23. 跳表 OCR 與輸入流程（競態防範）
+
+### 23.1 輸入流程模型
+
+```kotlin
+sealed class MeterInputFlow {
+  object PhotoFirst: MeterInputFlow()   // 預設：先拍清晰照片再輸入
+  object ManualFirst: MeterInputFlow()  // 例外：先輸入，再拍照驗證
+  data class Fallback(val reason: String): MeterInputFlow() // OCR 失敗降級
+}
+```
+
+**預設（PhotoFirst）**
+
+1. 司機按「結束行程」→ 引導拍攝跳表（即時檢測清晰度：Laplacian Var > 阈值、曝光/抖動）。
+2. 本地 OCR（離線）→ 讀值 A；若失敗，最多重試 2 次；仍失敗 → `Fallback(reason=OCR_FAIL)`，切 `ManualFirst`。
+3. 司機輸入金額 B；若 |A−B| > **20 元或 5%** → 二次確認並標記 `anomalyFlag`。
+
+**ManualFirst 啟動條件**
+
+* 光線不足/鏡面反光/裝置不支援；允許先輸入 B，之後**必拍一張**（可晚點補拍，最晚 T+2 小時）。
+* 反規避：連續 3 次「模糊」將暫停 ManualFirst 權限，要求司機校正鏡頭與操作（客服流程）。
+
+---
+
+## 24. 爭議與刪除凍結（Scheduler）
+
+**刪除策略**
+
+* 位置資料預設 24h 刪除：`order.locationExpireAt = createdAt + 24h`。
+* 若 `disputeStatus='PENDING'` → `locationExpireAt = null`（凍結）。
+
+**Cloud Scheduler / Functions（偽碼）**
+
+```javascript
+// 每日 02:00 執行
+for (const order of listOrdersExpiring()) {
+  if (order.disputeStatus === 'PENDING') {
+    if (now - order.disputeCreatedAt > 30*DAY) {
+      closeDispute(order, 'TIMEOUT'); // 系統結案（可申覆）
+    }
+    continue; // 暫緩刪除
+  }
+  purgeLocation(order);
+}
+```
+
+* 新的刪除請求：若凍結中，回覆「爭議處理中，將於結案後 +7 天再刪除」。
+
+---
+
+## 25. 愛心卡近端驗證（降級順序與離線）
+
+```kotlin
+enum class ProximityVerifyMethod { BLUETOOTH, ULTRASOUND, MANUAL_OTP, PHOTO_ID }
+```
+
+**順序與條件**
+
+1. **BLUETOOTH**：LESC 配對，乘客端在場自動驗證（最佳體驗）。
+2. **ULTRASOUND**：噪音環境評估（SNR>閾值）後啟用；若失敗轉 OTP。
+3. **MANUAL_OTP**：乘客 App 產生 4 位 OTP（可離線，基於本地時間與 token 的 TOTP）；司機輸入驗證。
+4. **PHOTO_ID（應急）**：拍攝愛心卡 + 乘客臉部（需另行合規審查與加密儲存；僅在 OTP 不可用且乘客同意時）。
+
+---
+
+## 26. 補助撥付與墊付政策
+
+```kotlin
+data class SubsidyPayment(
+  val orderId: String,
+  val amount: Int,
+  val status: String,      // PENDING / SUCCESS / FAILED / COMPENSATED
+  val retryCount: Int,
+  val compensationBy: String? = null // "platform" / "government"
+)
+```
+
+* 平台責任：避免歧視，**不得以支付型別為由拒單**。政府 API 故障或額度暫停時，平台可對**進行中**訂單先行 `COMPENSATED`（有每日上限）。
+* 司機風險控管：當月待撥補助 > X 元（Remote Config）時，可暫停接收 `LOVE_CARD` 新單（系統層面調度，不由司機自由拒單）。
+
+---
+
+## 27. 同步佇列與重試（資料永不丟）
+
+* 所有關鍵事件（狀態轉移、結算、照片）先寫入 Room **WAL 佇列**（`pending_events`）。
+* `SyncWorker` 無上限重試：每次失敗依 `EXPONENTIAL` 回退（10s→30m），但佇列**不清除**；使用 `uniqueWorkName(orderId)` 保證串行；使用者打開 App 或網路恢復即觸發即時同步。
+
+---
+
+## 28. Firebase Rules 追加防護
+
+* **距離上限**：由 Functions 計算 `serverDistanceKm` 寫回訂單，Rules 僅驗證「欄位存在且 ≤ 50km」。
+* **未來時間防禦**：RTDB `now` 驗證。
+
+```javascript
+"orders": {"$orderId": {
+  "serverDistanceKm": { ".validate": "newData.isNumber() && newData.val() <= 50" },
+  "acceptedAt": { ".validate": "newData.val() > data.parent().child('createdAt').val() && newData.val() <= now" },
+  "completedAt": { ".validate": "newData.val() > data.parent().child('startedAt').val() && newData.val() <= now" }
+}}
+```
+
+---
+
+## 29. 極端測試計畫（補強）
+
+* **網路**：2G/Edge 模擬、>10 分鐘完全離線、DNS 錯誤、政府 API >10s 超時。
+* **定位**：隧道 30 分鐘無 GPS、跳點/漂移、速度異常尖峰。
+* **並發**：單一熱區 100 司機同時收 Offer（配額與鎖競態）。
+* **資料**：timeline > 1000 事件、照片落地延遲 T+2h、超過 30 天的長爭議。
+* **硬體**：BLE 每 10 秒斷/重連、USB CRC 錯誤、相機模糊連續 3 次。
+
+---
+
+## 30. 上線前決策（Launch Policies，預設值）
+
+* **Quota**：`window=30 分`、`reset=FIXED_WINDOW`、`maxOrders= clamp(1, floor(1 + 0.5 * demand/activeDrivers), 3)`（區域可覆蓋）。
+* **Health**：視窗 12、準時閾 15s、`pause=2 分鐘`、自動恢復需連續兩窗 ≥0.9 或手動。
+* **OCR 流程**：`PhotoFirst` 預設；`ManualFirst` 僅於 OCR 連失敗或裝置不支援；差異閾值 20 元或 5%。
+* **Dispute**：24h 內可申訴；凍結刪除；30 天超時系統結案；結案 +7 天再刪除。
+* **Proximity**：BLUETOOTH → ULTRASOUND → MANUAL_OTP → PHOTO_ID（需合規）。
+* **補助**：月結；平台可臨時墊付（每日上限）避免拒載；待撥超限自動調度而非司機手動拒單。
+* **同步**：無上限重試＋佇列永不丟；RTDB 事件流取代輪詢。
+
+---
+
+---
+
+## 31. v1.4 配額重算觸發、健康度恢復、Listener 效能、OCR 閾值、TOTP 與『只月結不墊付』政策
+
+### 31.1 Quota 動態重算（含突發觸發 + 失敗回退）
+
+**資料結構**
+
+```kotlin
+data class QuotaCalculation(
+  val zoneId: String,
+  val calculatedAt: Long,
+  val validUntil: Long,          // 建議 10 分鐘 TTL
+  val fallbackValue: Int = 1,    // 計算失敗時用
+  val triggerType: String        // SCHEDULED / SURGE_DETECTED
+)
+```
+
+**觸發條件**
+
+* SCHEDULED：每 **5 分鐘**重算。
+* SURGE_DETECTED：近 **5 分鐘新單數 > surgeThreshold**（預設 20）或 `demand/activeDrivers > 1.5` 立即重算（Functions onWrite 觸發）。
+  **延遲與失敗**
+* 若重算逾時/失敗，沿用上一版直到 `validUntil`；逾期仍無新值 → 退回 `fallbackValue` 並把 `resetStrategy` 臨時切為 **SLIDING**（更彈性）。
+* 監控：寫入 `quota_recalc_log/{zoneId}`，供告警與觀測。
+
+---
+
+### 31.2 Health 恢復競態（明確規則）
+
+```kotlin
+data class HealthRecovery(
+  val strategy: String = "AUTO|MANUAL",
+  val autoRequire: String = "2_WINDOWS_0.9",   // 連續 2 視窗 health≥0.9
+  val manualCooldown: Int = 30,                 // 人工恢復冷卻 30s，防抖動
+  val manualOverride: Boolean = true            // 允許覆盖暫停
+)
+```
+
+* 視窗定義：**每窗 12 筆心跳**（約 2 分）。
+* 暫停 2 分鐘期間：
+
+  * **MANUAL**：允許司機切換「重新上線」，但需等 `manualCooldown=30s` 才真正恢復派單（避免閃爍）。
+  * **AUTO**：需要連續兩窗（共 24 筆）`health≥0.9` 自動解除。
+
+---
+
+### 31.3 RTDB Offer Queue Listener（效能/去重/記憶體）
+
+```kotlin
+class OfferQueueListener(private val driverId: String){
+  private val processed = ArrayDeque<String>()  // 有界去重佇列（max 128）
+  private var listener: ChildEventListener? = null
+  private var lastKey: String? = loadFromDataStore("last_offer_key_$driverId")
+
+  fun start(){
+    val ref = db.child("offer_queue/$driverId")
+    listener = ref.orderByKey().startAt(lastKey).limitToLast(1)
+      .addChildEventListener(object: ChildEventListener{
+        override fun onChildAdded(snap: DataSnapshot, prev: String?){
+          val key = snap.key ?: return
+          if (processed.contains(key)) return
+          processed.addLast(key)
+          if (processed.size>128) processed.removeFirst()
+          saveToDataStore("last_offer_key_$driverId", key)
+          // handle offer ...
+        }
+        /* onChildChanged/Removed 省略 */
+      })
+  }
+  fun stop(){
+    listener?.let{ db.child("offer_queue/$driverId").removeEventListener(it) }
+    listener=null
+    // processed 清空可選，lastKey 保留以便續傳
+  }
+}
+```
+
+* 只監聽 **limitToLast(1)**；以 `lastKey` 持久化恢復；去重佇列設上限；關閉時確實 removeListener，避免洩漏。
+
+---
+
+### 31.4 OCR 清晰度與自適應門檻
+
+```kotlin
+data class PhotoQualityCheck(
+  val laplacianVarThreshold: Double = 500.0,   // 基線
+  val exposureRange: Pair<Int,Int> = 30 to 225,
+  val minResolution: Pair<Int,Int> = 720 to 480,
+  val adaptiveThreshold: Boolean = true        // 依環境光微調
+)
+```
+
+* 自適應：根據亮度直方圖中位數 `medianLuma` 調整 Laplacian 門檻：
+
+  * 日間（medianLuma≥0.5）：閾值 500
+  * 黃昏（0.3–0.5）：閾值 400
+  * 夜間（<0.3）：閾值 300 + 開啟多張合成（bracket 3 張）
+* 連續 2 次未達閾值→提示補光/切手動輸入；仍需 **T+2h** 內補拍清晰照。
+
+---
+
+### 31.5 TOTP（離線 OTP）時鐘漂移與反串通
+
+```kotlin
+data class TOTPConfig(
+  val timeStep: Int = 30,
+  val allowedSkew: Int = 1,  // ±1 window
+  val tokenBinding: String = "ORDER_ID+PASSENGER_ID+DRIVER_ID",
+  val validateOnServer: Boolean = true
+)
+```
+
+* 產碼：乘客服端以 `HMAC-SHA1(secret(orderId, passengerId))` + `timeStep` 產生；司機端輸入後，由 Functions 以 **伺服器時間**驗證（容忍 ±1 窗）。
+* 反串通：每個 `orderId` 的 OTP 僅能使用一次；`usedTokens/{orderId}` 記錄防重放；頻繁失敗升級為藍牙/超音波或 PhotoID。
+* 校時：App 啟動時以 NTP/Server time 校正本地偏差（不存個資）。
+
+---
+
+### 31.6 補助撥付『只月結，不墊付』政策（取代臨時墊付）
+
+* **狀態機**：`PENDING` →（月結批次）→ `SUCCESS` | `FAILED` | `CARRY_OVER`（順延至下期）。
+* **即時結算**：行程結束時 **不減免司機現收**；乘客如需立刻折抵，須自備官方支付/卡工具（非本 App 墊付）。
+* **政府 API 故障/額度用盡**：建立索賠紀錄，標記 `CARRY_OVER`，下一期再嘗試；UI 對乘客提示「本次補助將於月結入帳」。
+* **演算法公平**：不得因 Love Card 造成降權；若司機待撥補助過高，系統可以**暫停新 Love Card 派送**（以供應鏈風險控制），但不影響一般單。
+* **移除**：全文件移除 `COMPENSATED` 與任何「平台臨時墊付」描述。
+
+---
+
+### 31.7 同步佇列極端策略（避免 ANR/資料遺失）
+
+```kotlin
+data class SyncQueuePolicy(
+  val maxQueueSize: Int = 5000,
+  val batchSize: Int = 50,
+  val pauseBetweenBatches: Long = 100, // ms
+  val cloudBackup: Boolean = true,
+  val migrationKey: String = "DRIVER_UID"
+)
+```
+
+* 佇列超上限：採 **丟最舊（FIFO）** 並上報遺失計數（遙測）。
+* 雲端備份：每 6 小時將未送事件加密（AES-GCM）打包至 Firebase Storage（綁定 `DRIVER_UID`），換機登入後可恢復。
+* 卸載：本地資料隨 App 移除，但最近一次備份仍可還原。
+* 批次節流：每批間隔 100ms，避免主執行緒壓力；WorkManager 設置前景服務以防系統中斷。
+
+---
+
+### 31.8 極端測試—可量化驗收
+
+| 測試                | 指標                                         |
+| ----------------- | ------------------------------------------ |
+| 2G 網路             | 接單延遲 < **30s**，成功率 > **95%**               |
+| 10 分鐘完全離線         | 重連後 **5 分鐘內**完成資料同步                        |
+| 隧道 30 分鐘無 GPS     | 插補誤差 < **200m**，不誤觸異常警報                    |
+| 熱區 100 司機並發       | Transaction 衝突率 < **5%**，p99 鎖定延遲 < **3s** |
+| Timeline >1000 事件 | UI 渲染無掉幀（>55fps），查詢 < **2s**               |
+| BLE 每 10s 斷線      | 累積金額誤差 < **5%**，重連成功率 > **90%**            |
+
+---
+
+### 31.9 Launch 政策澄清（業務面）
+
+* **Quota 公平性對外說法**：顯示「為維持公平派單，熱區自動接單有每 30 分鐘上限；達上限仍可接到手動派單」。客服話術已附。
+* **拒載懲罰**：不得因支付型別拒單；若系統因風險控制暫停 Love Card 派送，不影響一般單之機會分配。
+* **爭議結案與申覆**：系統 30 天超時結案；自結案起 **7 天內**可申覆，由 L2 稽核，若證實作弊保留追溯與封禁權。
+
+---
+
+---
+
+## 32. v1.5 支付域縮減：愛心卡/悠遊卡為**車載讀卡機**完成，本平台僅標記
+
+> **結論**：平台不是支付/補助系統，不做資格驗證、補助計算、近端驗證、或撥付；只在派單與結算畫面**提示**，並在訂單上**標記**支付型別與（可選）交易序號。原 v1.3～v1.4 中與補助核銷相關章節一律下線或改為「車隊對帳外部流程」。
+
+### 32.1 資料模型調整
+
+```kotlin
+enum class PaymentType { CASH, LOVE_CARD_PHYSICAL, OTHER }
+
+data class FareBreakdown(
+  val meterAmount: Int?,          // 跳表金額（唯一真相）
+  val appDistanceMeters: Int,     // App 量測（對帳/異常偵測）
+  val appDurationSeconds: Int,
+  val meterSource: String,        // BLE / USB / MANUAL / OCR
+  val photoUrl: String? = null,   // 跳表照片（可選：OCR 校對）
+  val paymentMethod: String,      // 與 PaymentType 對應："CASH" / "LOVE_CARD_PHYSICAL" / "OTHER"
+  val cardTxnId: String? = null,  // 司機可填的讀卡機交易序號（選填）
+  val driverNote: String? = null, // 備註：如「刷卡成功」
+  val timestamp: Long
+)
+
+data class Order(
+  /* 既有欄位略 */
+  val paymentType: PaymentType = PaymentType.CASH,
+  val fare: FareBreakdown? = null
+)
+```
+
+> **移除欄位**：`subsidyApplied`, `totalPayable`, `SubsidyRule`, `TOTP/近端驗證` 相關屬性與流程。
+
+### 32.2 流程（修正版）
+
+1. 乘客下單於 Chat 選擇 `paymentType=LOVE_CARD_PHYSICAL`（說明：**下車時在司機讀卡機刷卡**）。
+2. 派單通知與導航/到點流程**不變**；司機 UI 明示「💳 愛心卡」。
+3. 結算頁：顯示 `meterAmount` 與「請乘客刷卡」提示；司機按「✓ 已收款，結束行程」→ `DONE`。
+4. 訂單留存 `paymentMethod="LOVE_CARD_PHYSICAL"`，`cardTxnId`（若填）與 `photoUrl`（若拍）。
+
+### 32.3 UI/UX（乘客與司機）
+
+* **乘客**：支付方式選擇卡片附註：「本次由車上讀卡機完成扣款」。
+* **司機**：接單卡片顯示支付方式；結算頁提供「請乘客刷卡」按鈕（**僅提示**，無計算）。
+
+### 32.4 Firebase Rules & 後端約束（精簡）
+
+```javascript
+"orders": {"$orderId": {
+  "paymentType": { ".validate": "newData.val() in ['CASH','LOVE_CARD_PHYSICAL','OTHER']" },
+  "fare/paymentMethod": { ".validate": "newData.val() in ['CASH','LOVE_CARD_PHYSICAL','OTHER']" },
+  // 支付型別變更：允許乘客在 SETTLING 前修改；DONE 後禁止
+  "status": { 
+    ".write": "auth != null && /* 其他狀態拓撲驗證略 */ true" 
+  }
+}}
+```
+
+> **說明**：補助金/對帳屬外部（車隊/政府）流程，平台不寫入補助額，不連政府 API。
+
+### 32.5 測試影響面
+
+* 刪除 **§25 愛心卡近端驗證**、**§26 補助撥付** 的全部測試；保留「支付型別提示」與「卡機交易序號（可選）」輸入測試。
+* 保留跳表 OCR 清晰度與異常偵測（僅作稽核提醒，不影響結算）。
+
+### 32.6 文件清理（Deprecations）
+
+* §21.3（原「愛心卡資格與防詐」）➡️ 標記為 **移除**。
+* §25（原「近端驗證降級」）➡️ **移除**。
+* §26（原「補助撥付」）➡️ **移除**，改註記「由車隊對帳，平台不涉入」。
+* §31.6（只月結不墊付）➡️ 保留政策說明，但註明「僅作資訊展示，不執行撥付」。
+
+### 32.7 風險與對策（仍由平台處理的最小集合）
+
+* **誤選支付型別**：允許在 `SETTLING` 前由乘客/司機協議調整；`DONE` 後不可修改。
+* **跳表爭議**：仍提供照片/OCR 與軌跡異常偵測，作為客服稽核依據（無涉支付）。
+* **對帳便利**：`cardTxnId` 為選填；若車隊需強制，可透過 Remote Config 打開「必填」。
+
+---
+
+---
+
+## 33. 車資**預估**與「跳表為準」聲明（不涉支付）
+
+> 目標：在不干涉實際金流的前提下，於叫車與行程中提供**參考用**預估車資；實際金額以車上**實體跳表**為唯一權威。
+
+### 33.1 模型與資料來源
+
+* **路徑/時間**：Google Directions/Distance Matrix（`mode=driving`、`traffic_model=best_guess`、`departure_time=now`）。
+* **費率**：`TariffSnapshot`（由後端下發、可分時段/區域/夜間附加）。
+* **容錯**：Directions 失敗時以 **Haversine×路網係數 1.3** 估距、**預設均速 28km/h** 估時（Remote Config 可調）。
+
+```kotlin
+data class TariffSnapshot(
+  val code: String,                 // HLN_2025Q4
+  val baseFare: Int,                // 起跳
+  val baseDistanceMeters: Int,
+  val perKm: Int,
+  val perMin: Int,
+  val nightSurchargePct: Int? = null,
+  val roundingTo: Int = 10,
+  val validFrom: Long,
+  val validTo: Long
+)
+
+fun estimateFare(distKm: Double, durMin: Double, t: TariffSnapshot): Int {
+  val distanceCost = max(0.0, distKm - t.baseDistanceMeters/1000.0) * t.perKm
+  val timeCost = durMin * t.perMin
+  val raw = t.baseFare + distanceCost + timeCost
+  val night = t.nightSurchargePct?.let { raw * (1 + it/100.0) } ?: raw
+  return (round(night / t.roundingTo) * t.roundingTo).toInt()
+}
+```
+
+### 33.2 顯示規則（區間化與聲明）
+
+* 顯示 **區間**：`[估價±max(12%, 30元)]`；短途（<2km）最小區間 **±20元**。
+* 若 `paymentType=LOVE_CARD_PHYSICAL`：顯示**跳表總額估計**，加註「愛心卡折抵由**車載讀卡機**決定，App 不計算」。
+* 所有 UI 必附固定聲明：**「實際金額以車上跳表為準」**。
+
+### 33.3 乘客端 UX（Chat-first）
+
+* 下單表單顯示：
+
+  * 🗺 起點/終點、🕒 預估時間、💰 **預估車資** `$X～Y`（灰色說明：以跳表為準）。
+* 訂單建立後系統訊息：
+
+  * 「預估車資：約 `$X`，塞車可能變動；實際以跳表為準。」
+* 目的地 `UNKNOWN/CHANGING`：
+
+  * `UNKNOWN`：顯示「目前無法估價，請上車告知司機。」
+  * `CHANGING`：每次變更時重新估算並推一則系統訊息（不干涉跳表）。
+
+### 33.4 司機端 UX
+
+* 接單卡：不顯示估價（避免行為偏差），僅於乘客詢問時提供語音回覆：「App 顯示的金額是估計，**跳表為準**」。
+* 導航頁：支援「乘客詢問」快捷語（TTS 回覆同上）。
+
+### 33.5 邊界與回退
+
+* Directions 失敗或 API 配額觸頂：
+
+  * 使用本地退化模型（Haversine/均速），UI 附註「路況不明，估價可能不準」。
+* 地圖不可用/離線：
+
+  * 若乘客已設定終點，沿用上次已知路徑估價；否則顯示「暫無估價」。
+
+### 33.6 資料流與隱私
+
+* 估價計算於 **Cloud Functions** 執行（避免在客端外洩費率與 API Key），將 `estimate{min,max,tariffCode,at}` 回寫 `orders/{id}/estimate`（可選）。
+* 估價事件（匿名化）保留 30 天作為模型調參依據。
+
+### 33.7 驗收與監測（KPI）
+
+* **準確率**：`|實際跳表−估價中位|/實際` ≤ **15%** 的行程占 **≥80%**。
+* **極端差距監測**：誤差 > **30% 或 150 元** 進異常樣本池；每週回訓參數（道路係數/均速/分時段附加）。
+* **性能**：估價 API p95 < **400ms**（Directions 命中時 < 900ms）。
+
+### 33.8 測試用例（新增）
+
+* 短途（1–2km）、中途（5–8km）、長途（>20km）。
+* 通暢/壅塞/封路繞行；夜間附加啟用與否。
+* `UNKNOWN`→上車後設定；`CHANGING` 多次變更。
+* Directions 403/429、無網、GPS 漂移；Haversine 退化生效。
+
+### 33.9 產品/法遵文案（固定）
+
+* 乘客端：
+
+  * 「**預估車資**僅供參考，**實際金額以車上計程表為準**。」
+  * 「使用**愛心卡**者，實際折抵由車載讀卡機決定，App 不處理扣款。」
+* 司機端：
+
+  * 「若乘客詢問費用，請回覆：『App 顯示的是預估金額，實際以跳表為準。』」
+
+---
+
+---
+
+## 34. 將 Google STT 改為 **OpenAI Whisper API**（Android + Firebase 代理）
+
+> 本節為 v1.6 熱修：**全面以 OpenAI Whisper 取代 Google STT**。若文件其他章節仍提到 Google STT / SpeechRecognizer，皆以本節為準。
+
+### 34.1 架構與安全
+
+* **代理設計**：Android 不持有 API Key。端上只把音訊切片上傳到 **Firebase Functions**（`/stt/transcribe`），由後端以服務端金鑰呼叫 OpenAI `/v1/audio/transcriptions`。
+* **近即時策略**：採「**短段切片** + 即時回傳」。每 2–8 秒一段（VAD 斷句），回傳文字增量；需要真正串流再評估 **Realtime API**。
+* **隱私**：除錯模式以外不保存音檔；遙測僅記錄延遲與錯誤碼。
+
+### 34.2 後端（Functions）樣板
+
+> 預設模型：`gpt-4o-transcribe`；失敗時自動退回 `whisper-1`。
+
+```js
+// POST /stt/transcribe  body: { audioBase64, language }
+import fetch from 'node-fetch';
+export default async (req, res) => {
+  try {
+    const { audioBase64, language = 'zh' } = req.body;
+    const bin = Buffer.from(audioBase64, 'base64');
+    const form = new FormData();
+    form.append('file', new Blob([bin], { type: 'audio/webm' }), 'chunk.webm');
+    form.append('model', 'gpt-4o-transcribe'); // fallback: whisper-1
+    form.append('language', language);
+    form.append('prompt', '花蓮、七星潭、吉安、壽豐等地名；台語常見詞');
+    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, body: form
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    res.json({ text: j.text, at: Date.now() });
+  } catch (e) { res.status(502).json({ error: String(e) }); }
+}
+```
+
+### 34.3 Android 錄音與切片
+
+* `AudioRecord` 16kHz Mono → `WebM/Opus`，VAD 靜音 300–600ms 斷句，**最長 8 秒**一段。
+* 端上以 OkHttp/Retrofit 呼叫 Functions；兩次失敗即退回按鍵輸入（安全優先）。
+
+### 34.4 參數（Remote Config）
+
+* `stt.model = gpt-4o-transcribe|whisper-1`
+* `stt.chunk.maxSec = 8`
+* `stt.vad.silenceMs = 400`
+* `stt.lang = zh`（可送 `zh-TW`）
+* `stt.retry = 2`（指數退避 300→1200ms）
+
+### 34.5 體驗與文案
+
+* 司機端：按住說話→逐段出字；若網路差，彈出提示「語音辨識暫不可用，請改用按鍵」。
+* 法遵：顯示「語音轉文字由 OpenAI Whisper 提供；僅做即時辨識，不儲存音檔」。
+
+### 34.6 SLO 與測試
+
+* p95 端到端（2–4s 段） ≤ **1200ms**；中文 CER **≤12%**（實測標定集）。
+* 極端：2G/離線、長噪音、方言口音；Directions 變更下的口述地址。
+
+### 34.7 參考（官方文件）
+
+* Speech-to-Text 指南與 `createTranscription`：OpenAI Docs。
+* Realtime API（若升級全雙工語音）：OpenAI Docs。
+
+````
+
+
+
+---
+
+## 35. 地圖整合與 Google APIs 串接指引（Maps SDK / Places / Directions / Distance Matrix / Geolocation）
+> 目的：統一規範地圖呈現、定位、路徑與 ETA 計算、地點輸入與快取、費用控制與隱私合規。**乘客端未來支援 iOS；司機端為 Android。**
+
+### 35.1 元件與責任邊界
+- **Maps SDK (Android/iOS)**：地圖渲染、相機控制、地標與路線 Polyline、定位藍點、手勢事件。
+- **Places API**：自動完成（Autocomplete）、Place Details、反向地理（使用 `places: NearbySearch/FindPlace` 組合，若需 Geocoding API 再評估）。
+- **Directions API**：單一路線（含即時路況）、多條備選、逐步導航語意（僅作顯示與估價，不自建 turn-by-turn）。
+- **Distance Matrix API**：批量 ETA（候選司機 → 叫車點）與重排派單優先序。
+- **Geolocation API**：在 GPS 不穩/不可用時，利用 Cell/Wi‑Fi 指紋推估粗略位置（入站定位、冷啟定位輔助）。
+
+### 35.2 金鑰與安全（必做）
+- **行動端金鑰（Maps/Places）**：限制 *Android App*（包名+SHA‑1）與 *iOS Bundle ID*；開啟配額告警。
+- **伺服器金鑰（Directions/Matrix/Geolocation）**：僅後端 Functions 使用，來源 IP 白名單；前端一律走自家 API 代理，避免洩鍵。
+- **Key 分離**：`maps_key_mobile`（可見）／`maps_key_server`（不可見）；輪替策略：季度換鍵。
+
+### 35.3 資料模型（新增）
+```kotlin
+data class PlaceRef(
+  val placeId: String,
+  val name: String?,
+  val address: String?,
+  val lat: Double,
+  val lng: Double,
+  val types: List<String> = emptyList()
+)
+
+data class RouteSnapshot(
+  val routeId: String,            // Directions response hash
+  val distanceMeters: Int,
+  val durationSeconds: Int,       // with traffic (best_guess)
+  val polyline: String,           // encoded polyline
+  val alternatives: Int = 0,
+  val trafficModel: String = "best_guess",
+  val createdAt: Long = System.currentTimeMillis()
+)
+
+data class EtaMatrix(
+  val orderId: String,
+  val entries: Map<String, Int>,  // driverId -> etaSeconds
+  val computedAt: Long
+)
+````
+
+> 所有位址對外展示以 `PlaceRef`，內部路徑快照以 `RouteSnapshot`（供估價與重播）。
+
+### 35.4 Places：Autocomplete 與 Details
+
+* **Session Token**：每次地點輸入建立 token，Autocomplete→Details **共用**，可省費用與提高精度。
+* **Field Mask**：`place_id,name,formatted_address,geometry/location,types`；避免拉全部欄位降低成本。
+* **本地快取**：最近 20 筆 `placeId` LRU；離線時顯示歷史地點。
+* **防誤觸**：點擊地圖落點→反查最近 POI（圓半徑 50m）與街道段落二擇一。
+
+### 35.5 Directions：路徑/估時/重算
+
+* **參數**：`departure_time=now`、`traffic_model=best_guess`、`alternatives=2`（Remote Config 可調），`avoid=tolls|ferries`（可選）。
+* **回應處理**：選最短 ETA 為預設；保留 1 條替代線（灰色）。
+* **重算策略**：偏離路徑 > 80m 或 ETA 惡化 > 20% 時觸發重算（最小間隔 30s）。
+* **多段里程**：長程拆段請求，避免 Directions URL 長度限制。
+
+### 35.6 Distance Matrix：派單前 ETA
+
+* **用途**：對候選司機（最多 25 人/批）→ 叫車點，取得批量 ETA；供 §9 派單演算法 `ETA_to_pickup`。
+* **節流**：分批排程（每批間隔 200–400ms）；候選超過 25 → 取前 N 位最近司機（基於直線距離預篩）。
+* **快取**：相同 Origin/目的在 30 秒內命中快取以減少費用。
+
+### 35.7 Geolocation：冷啟/室內定位輔助
+
+* **啟用時機**：首次啟動、GPS 訊號品質 < 阈值（HDOP/SNR），或連續 5 秒無更新。
+* **隱私**：送出 Wi‑Fi BSSID/CellID 需在隱私條款明示；只在使用中傳送，結果不長期保存。
+
+### 35.8 Android 地圖 UI 與效能
+
+* **Compose Map**：`GoogleMap` composable + `rememberCameraPositionState()`；路線以 `Polyline`（simplify Douglas‑Peucker）繪製。
+* **相機策略**：
+
+  * 行前：`LatLngBounds(pickup, dest).pad(64dp)`
+  * 行中：跟車模式（bearing/speed 平滑，指數濾波），前視偏移 30–40%。
+* **標記**：司機圖示向量化（旋轉對齊航向）；乘客上車點與目的地使用 semantic icon。
+* **FPS**：目標 60fps；位置更新 1–5s；Polyline 點數上限 10k（超限分段）。
+
+### 35.9 離線/弱網退化
+
+* **地圖磚**：Maps SDK 會短暫快取；完全離線時顯示灰階占位與羅盤路條。
+* **路線**：保留最近一次 `RouteSnapshot` 作顯示，不再重算；顯示「離線估價不準確」。
+* **地址**：歷史 `PlaceRef` 快取可選；無法新查。
+
+### 35.10 成本控制（配額與頻率）
+
+* **Directions/Matrix**：優先後端合併請求；禁止前端直連。
+* **Places**：Autocomplete 啟用 **session token** 並限 `types=address|establishment|geocode`。
+* **快取層**：Cloud Functions 以 `(origin,dest,mode,departure)` 為鍵快取 30–60s。
+* **監控**：BigQuery Export + 警報：日費用 > 70% 配額即通知。
+
+### 35.11 錯誤處理與 UI 提示
+
+* **429/Quota**：改用退化模型（Haversine × 路網係數）並提示「目前路徑服務繁忙，已改用近似估算」。
+* **ZERO_RESULTS**：提示換目的地或改變上車點；提供附近接送點建議（Places Nearby）。
+* **NETWORK_ERROR**：重試 2 次；仍失敗顯示上次路徑與「導航仍可使用裝置上的 Google 地圖」。
+
+### 35.12 測試與驗收
+
+* **地點輸入**：中英文/台語地名、錯別字；Autocomplete→Details 欄位命中。
+* **路徑**：通暢/壅塞/封路繞道、山區弱網、隧道；重算觸發正確率 ≥ 95%。
+* **ETA 批量**：25 司機並發批次衡量；p95 延遲 < 700ms（Functions 端）。
+* **離線**：顯示退化狀態、上次路徑存在。
+
+### 35.13 Remote Config 建議
+
+* `maps.route.alternatives = 2`
+* `maps.route.avoid = "tolls|ferries"`
+* `maps.recalc.minIntervalSec = 30`
+* `maps.matrix.batchSize = 25`
+* `maps.places.types = "address,establishment,geocode"`
+* `maps.simplify.dpToleranceMeters = 3`
+
+### 35.14 合規與資料保存
+
+* 地址/地點僅於訂單上下文保留；過期訂單移除精確座標，保留網格化位置（~150m）供統計。
+* 使用者可申請刪除與匿化；符合 §21.10 刪除權實作。
+
+---

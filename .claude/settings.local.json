@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/eric/Desktop/HualienTaxiServer/src/api/**)",
+      "Read(//Users/eric/Desktop/HualienTaxiServer/**)",
+      "Bash(./gradlew:*)",
+      "Bash(pnpm list:*)",
+      "Bash(pm2 status:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

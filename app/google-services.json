@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "643482226914",
+    "project_id": "hualientaxiserver-f1813",
+    "storage_bucket": "hualientaxiserver-f1813.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:643482226914:android:f91b515b5da72b992b0ebb",
+        "android_client_info": {
+          "package_name": "com.hualien.taxidriver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDQ9DpRsgzWNHfaXgTu_iPn9n68kC0dec"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
