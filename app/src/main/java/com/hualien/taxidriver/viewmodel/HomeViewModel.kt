@@ -91,9 +91,12 @@ class HomeViewModel : ViewModel() {
     fun updateDriverStatus(driverId: String, status: DriverAvailability) {
         android.util.Log.d("HomeViewModel", "========== 更新司機狀態 ==========")
         android.util.Log.d("HomeViewModel", "司機ID: $driverId")
+        android.util.Log.d("HomeViewModel", "當前狀態: ${_uiState.value.driverStatus}")
         android.util.Log.d("HomeViewModel", "新狀態: $status")
 
         viewModelScope.launch {
+            val currentStatus = _uiState.value.driverStatus
+
             // 先更新UI
             _uiState.value = _uiState.value.copy(
                 driverStatus = status,
@@ -101,6 +104,29 @@ class HomeViewModel : ViewModel() {
             )
 
             try {
+                // 【關鍵修復1】如果從 OFFLINE 切換到其他狀態，先重新連接 WebSocket
+                if (currentStatus == DriverAvailability.OFFLINE && status != DriverAvailability.OFFLINE) {
+                    android.util.Log.d("HomeViewModel", "🔌 從離線狀態切回，重新連接 WebSocket")
+                    webSocketManager.connect(driverId)
+
+                    // 給一點時間讓 WebSocket 連接建立
+                    kotlinx.coroutines.delay(500)
+                }
+
+                // 【關鍵修復2】通過 WebSocket 實時通知 server 狀態變化
+                if (status == DriverAvailability.OFFLINE) {
+                    // 離線前先發送狀態更新事件
+                    android.util.Log.d("HomeViewModel", "📡 先發送離線狀態事件，再斷開連接")
+                    webSocketManager.updateDriverStatus(driverId, status.name)
+
+                    // 給一點時間讓事件發送出去
+                    kotlinx.coroutines.delay(300)
+                } else {
+                    // 其他狀態變化立即發送
+                    android.util.Log.d("HomeViewModel", "📡 發送狀態更新事件")
+                    webSocketManager.updateDriverStatus(driverId, status.name)
+                }
+
                 // 呼叫API更新server端的司機狀態
                 val result = repository.updateDriverStatus(driverId, status)
 
