@@ -8,11 +8,15 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "driver_preferences")
 
 class DataStoreManager(private val context: Context) {
+
+    // Token 緩存，避免 runBlocking
+    private var cachedToken: String? = null
 
     companion object {
         private val KEY_TOKEN = stringPreferencesKey("auth_token")
@@ -31,6 +35,9 @@ class DataStoreManager(private val context: Context) {
         phone: String,
         plate: String
     ) {
+        // 緩存 token 避免 AuthInterceptor 中使用 runBlocking
+        cachedToken = token
+
         context.dataStore.edit { preferences ->
             preferences[KEY_TOKEN] = token
             preferences[KEY_DRIVER_ID] = driverId
@@ -73,6 +80,9 @@ class DataStoreManager(private val context: Context) {
 
     // 登出時清除所有數據
     suspend fun clearLoginData() {
+        // 清除緩存的 token
+        cachedToken = null
+
         context.dataStore.edit { preferences ->
             preferences.clear()
         }
@@ -85,5 +95,33 @@ class DataStoreManager(private val context: Context) {
             token = preferences[KEY_TOKEN]
         }
         return token
+    }
+
+    /**
+     * 獲取緩存的 Token（非 suspend，用於 AuthInterceptor）
+     * 避免使用 runBlocking
+     */
+    fun getCachedToken(): String? = cachedToken
+
+    /**
+     * 初始化時從 DataStore 加載 token 到緩存
+     * 應該在應用啟動時調用
+     */
+    suspend fun initializeTokenCache() {
+        cachedToken = token.first()
+    }
+
+    /**
+     * 更新 Token（用於 Token 刷新）
+     * 同時更新緩存和 DataStore
+     */
+    suspend fun updateToken(newToken: String) {
+        // 更新緩存
+        cachedToken = newToken
+
+        // 更新 DataStore
+        context.dataStore.edit { preferences ->
+            preferences[KEY_TOKEN] = newToken
+        }
     }
 }

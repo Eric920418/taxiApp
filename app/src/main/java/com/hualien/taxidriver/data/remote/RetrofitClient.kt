@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 object RetrofitClient {
 
     private var authInterceptor: AuthInterceptor? = null
+    private var tokenRefreshAuthenticator: TokenRefreshAuthenticator? = null
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BODY
@@ -41,10 +42,12 @@ object RetrofitClient {
 
     /**
      * 初始化 RetrofitClient（在 Application 或 MainActivity 中調用）
+     * 優化版：添加 Token 自動刷新機制
      */
     fun init(context: Context) {
         val dataStoreManager = DataStoreManager(context.applicationContext)
         authInterceptor = AuthInterceptor(dataStoreManager)
+        tokenRefreshAuthenticator = TokenRefreshAuthenticator(dataStoreManager)
     }
 
     private fun getOkHttpClient(): OkHttpClient {
@@ -58,6 +61,12 @@ object RetrofitClient {
             // 如果有 authInterceptor，添加它
             authInterceptor?.let {
                 builder.addInterceptor(it)
+            }
+
+            // ===== 添加 Token 自動刷新機制 =====
+            // Authenticator 會在收到 401 Unauthorized 時自動觸發
+            tokenRefreshAuthenticator?.let {
+                builder.authenticator(it)
             }
 
             okHttpClient = builder.build()

@@ -30,8 +30,9 @@ class HybridLocationService(private val context: Context) {
 
     companion object {
         private const val TAG = "HybridLocationService"
-        private const val GPS_TIMEOUT_MS = 10000L  // GPS 超時時間 10 秒
+        private const val GPS_TIMEOUT_MS = 8000L  // GPS 超時時間 8 秒
         private const val GPS_ACCURACY_THRESHOLD = 50.0  // GPS 精度閾值（公尺）
+        private const val GEOLOCATION_COOLDOWN_MS = 30000L  // Geolocation API 冷卻時間 30 秒
     }
 
     private val fusedLocationClient: FusedLocationProviderClient =
@@ -48,8 +49,13 @@ class HybridLocationService(private val context: Context) {
     // GPS 位置回調
     private var locationCallback: LocationCallback? = null
 
+    // Geolocation API 節流控制
+    private var lastGeolocationCallTime = 0L
+    private var isGpsWorking = false
+
     /**
      * 開始混合定位
+     * 優化版：使用優先級策略減少 API 調用
      */
     suspend fun startLocationUpdates() = withContext(Dispatchers.Main) {
         try {
@@ -61,15 +67,20 @@ class HybridLocationService(private val context: Context) {
                 return@withContext
             }
 
-            // 策略 1: 先用 Geolocation API 快速獲取初始位置
-            Log.d(TAG, "Step 1: Getting initial location from Geolocation API...")
-            scope.launch {
-                getGeolocationQuickly()
-            }
+            // 優化策略：優先使用 GPS，失敗才用 Geolocation API
+            Log.d(TAG, "Starting optimized hybrid location...")
 
-            // 策略 2: 同時啟動 GPS 定位
-            Log.d(TAG, "Step 2: Starting GPS location updates...")
+            // Step 1: 先嘗試 GPS
             startGpsLocationUpdates()
+
+            // Step 2: 設定超時，如果 GPS 在 8 秒內沒有結果，才調用 Geolocation API
+            scope.launch {
+                delay(GPS_TIMEOUT_MS)
+                if (!isGpsWorking && _locationState.value !is LocationState.Success) {
+                    Log.d(TAG, "GPS timeout, falling back to Geolocation API")
+                    getGeolocationAsBackup()
+                }
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start location updates", e)
@@ -78,9 +89,19 @@ class HybridLocationService(private val context: Context) {
     }
 
     /**
-     * 使用 Geolocation API 快速獲取初始位置
+     * 使用 Geolocation API 作為備援
+     * 優化：添加節流控制，避免頻繁調用
      */
-    private suspend fun getGeolocationQuickly() {
+    private suspend fun getGeolocationAsBackup() {
+        // 檢查冷卻時間
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastGeolocationCallTime < GEOLOCATION_COOLDOWN_MS) {
+            Log.d(TAG, "Geolocation API in cooldown, skipping...")
+            return
+        }
+
+        lastGeolocationCallTime = currentTime
+
         try {
             val result = geolocationService.getCurrentLocation()
 
@@ -96,10 +117,14 @@ class HybridLocationService(private val context: Context) {
                         accuracy = geolocation.accuracy,
                         source = geolocation.source
                     )
-                    Log.d(TAG, "Geolocation API success: ${geolocation.location}, accuracy: ${geolocation.accuracy}m")
+                    Log.d(TAG, "Geolocation API backup success: ${geolocation.location}, accuracy: ${geolocation.accuracy}m")
                 }
             }.onFailure { error ->
-                Log.w(TAG, "Geolocation API failed", error)
+                Log.w(TAG, "Geolocation API backup failed", error)
+                // 如果 GPS 也失敗，設置錯誤狀態
+                if (!isGpsWorking) {
+                    _locationState.value = LocationState.Error("所有定位方式都失敗")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Geolocation API error", e)
@@ -116,13 +141,14 @@ class HybridLocationService(private val context: Context) {
                 return
             }
 
-            // 建立位置請求
+            // 建立位置請求（優化：降低更新頻率）
             val locationRequest = LocationRequest.Builder(
                 Priority.PRIORITY_HIGH_ACCURACY,
-                5000L  // 每 5 秒更新一次
+                10000L  // 每 10 秒更新一次
             ).apply {
-                setMinUpdateIntervalMillis(2000L)  // 最快 2 秒更新
-                setMaxUpdateDelayMillis(10000L)    // 最多延遲 10 秒
+                setMinUpdateIntervalMillis(5000L)  // 最快 5 秒更新
+                setMaxUpdateDelayMillis(15000L)    // 最多延遲 15 秒
+                setMinUpdateDistanceMeters(10f)    // 移動 10 米才更新
             }.build()
 
             // 建立位置回調
@@ -136,10 +162,11 @@ class HybridLocationService(private val context: Context) {
 
                 override fun onLocationAvailability(availability: LocationAvailability) {
                     if (!availability.isLocationAvailable) {
-                        Log.w(TAG, "GPS location unavailable, falling back to Geolocation API")
-                        // GPS 不可用，使用 Geolocation API 作為備援
+                        Log.w(TAG, "GPS location unavailable")
+                        isGpsWorking = false
+                        // GPS 不可用，使用 Geolocation API 作為備援（有節流）
                         scope.launch {
-                            getGeolocationQuickly()
+                            getGeolocationAsBackup()
                         }
                     }
                 }
@@ -152,15 +179,7 @@ class HybridLocationService(private val context: Context) {
                 Looper.getMainLooper()
             )
 
-            // 設置 GPS 超時
-            scope.launch {
-                delay(GPS_TIMEOUT_MS)
-                val currentState = _locationState.value
-                if (currentState is LocationState.Loading || currentState is LocationState.Idle) {
-                    Log.w(TAG, "GPS timeout, using Geolocation API")
-                    getGeolocationQuickly()
-                }
-            }
+            // 移除重複的 GPS 超時處理（已經在 startLocationUpdates 中處理）
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start GPS location updates", e)
@@ -169,21 +188,30 @@ class HybridLocationService(private val context: Context) {
 
     /**
      * 處理 GPS 位置
+     * 優化：減少 Geolocation API 調用
      */
     private fun handleGpsLocation(location: Location) {
         val accuracy = location.accuracy.toDouble()
         val latLng = LatLng(location.latitude, location.longitude)
 
+        // GPS 工作中
+        isGpsWorking = true
+
         // 檢查 GPS 精度
         if (accuracy > GPS_ACCURACY_THRESHOLD) {
-            Log.w(TAG, "GPS accuracy poor: ${accuracy}m, falling back to Geolocation API")
-            scope.launch {
-                getGeolocationQuickly()
+            Log.w(TAG, "GPS accuracy poor: ${accuracy}m")
+
+            // 只有在沒有任何位置時才使用 Geolocation API
+            val currentState = _locationState.value
+            if (currentState !is LocationState.Success) {
+                scope.launch {
+                    getGeolocationAsBackup()
+                }
             }
-            return
+            // 即使精度差，也更新 GPS 位置（總比沒有好）
         }
 
-        // GPS 定位成功且精度足夠
+        // 更新 GPS 定位（不管精度如何）
         _locationState.value = LocationState.Success(
             location = latLng,
             accuracy = accuracy,
@@ -225,7 +253,9 @@ class HybridLocationService(private val context: Context) {
      */
     suspend fun forceGeolocation() {
         _locationState.value = LocationState.Loading
-        getGeolocationQuickly()
+        // 強制調用時重置冷卻時間
+        lastGeolocationCallTime = 0L
+        getGeolocationAsBackup()
     }
 
     /**

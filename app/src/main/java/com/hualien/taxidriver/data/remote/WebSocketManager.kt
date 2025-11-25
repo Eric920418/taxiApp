@@ -6,18 +6,40 @@ import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.utils.Constants
 import io.socket.client.IO
 import io.socket.client.Socket
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
+import kotlin.math.min
+import kotlin.math.pow
 
 /**
  * WebSocket管理器（Socket.io）
+ * 優化版本：智能指數退避重連 + 連接狀態管理
  */
 class WebSocketManager private constructor() {
 
     private var socket: Socket? = null
     private val gson = Gson()
+
+    // 添加 Mutex 確保線程安全
+    private val connectionMutex = Mutex()
+
+    // 追踪連接狀態，避免重複連接
+    private var isConnecting = false
+    private var currentMode: ConnectionMode? = null
+
+    // ===== 智能重連相關 =====
+    private var reconnectJob: Job? = null
+    private var currentReconnectAttempt = 0
+    private var lastUserId: String? = null  // 記住上次連接的用戶ID，用於自動重連
+
+    // 重連狀態
+    private val _reconnectState = MutableStateFlow(ReconnectState.IDLE)
+    val reconnectState: StateFlow<ReconnectState> = _reconnectState.asStateFlow()
 
     // 連接狀態
     private val _isConnected = MutableStateFlow(false)
@@ -43,98 +65,144 @@ class WebSocketManager private constructor() {
     private val _driverLocation = MutableStateFlow<DriverLocationInfo?>(null)
     val driverLocation: StateFlow<DriverLocationInfo?> = _driverLocation.asStateFlow()
 
+    // Coroutine scope for reconnection
+    private val reconnectScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     /**
      * 連接到伺服器（司機端）
+     * 優化版：使用 Mutex 防止競態條件，避免重複註冊事件
      */
-    fun connect(driverId: String) {
-        try {
-            Log.d(TAG, "========== 司機端WebSocket初始化 ==========")
-            Log.d(TAG, "司機ID: $driverId")
-            Log.d(TAG, "WebSocket URL: ${Constants.WS_URL}")
+    suspend fun connect(driverId: String) {
+        connectionMutex.withLock {
+            try {
+                Log.d(TAG, "========== 司機端WebSocket初始化 ==========")
+                Log.d(TAG, "司機ID: $driverId")
+                Log.d(TAG, "WebSocket URL: ${Constants.WS_URL}")
 
-            // 如果已經有連接，先斷開
-            if (socket != null) {
-                Log.w(TAG, "⚠️ 檢測到已存在的 Socket 連接，先斷開...")
-                socket?.disconnect()
-                socket?.off()  // 移除所有事件監聽
-                socket = null
+                // 檢查是否已經在連接中或已連接
+                if (isConnecting || (_isConnected.value && currentMode == ConnectionMode.DRIVER)) {
+                    Log.w(TAG, "⚠️ WebSocket 已經在連接中或已連接，跳過重複連接")
+                    return
+                }
+
+                isConnecting = true
+
+                // 完全清理舊連接
+                cleanupSocket()
+
+                val options = IO.Options().apply {
+                    reconnection = true
+                    reconnectionDelay = Constants.WS_RECONNECT_DELAY
+                    reconnectionAttempts = Constants.WS_MAX_RECONNECT_ATTEMPTS
+                    timeout = 10000L  // 添加10秒連接超時
+                }
+
+                // 創建新的 socket 實例
+                socket = IO.socket(Constants.WS_URL, options)
+
+                // 分離事件註冊和連接，避免重複註冊
+                setupDriverEventListeners(driverId)
+
+                // 開始連接
+                Log.d(TAG, "正在連接 WebSocket...")
+                socket?.connect()
+
+                currentMode = ConnectionMode.DRIVER
+                isConnecting = false
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ 初始化司機端 WebSocket 失敗", e)
+                isConnecting = false
+            }
+        }
+    }
+
+    /**
+     * 設置司機端事件監聽器（獨立方法，避免重複註冊）
+     * 優化版：添加智能重連機制
+     */
+    private fun setupDriverEventListeners(driverId: String) {
+        // 保存用戶ID用於重連
+        lastUserId = driverId
+
+        socket?.apply {
+            // 先移除所有舊的監聽器
+            off()
+
+            on(Socket.EVENT_CONNECT) {
+                Log.d(TAG, "✅ 司機端 WebSocket 已連接")
+                _isConnected.value = true
+                _reconnectState.value = ReconnectState.IDLE
+                currentReconnectAttempt = 0  // 重置重連計數
+
+                val onlineData = JSONObject().apply {
+                    put("driverId", driverId)
+                }
+                Log.d(TAG, "📤 發送 driver:online 事件: $onlineData")
+                emit("driver:online", onlineData)
             }
 
-            val options = IO.Options().apply {
-                reconnection = true
-                reconnectionDelay = Constants.WS_RECONNECT_DELAY
-                reconnectionAttempts = Constants.WS_MAX_RECONNECT_ATTEMPTS
-            }
+            on(Socket.EVENT_DISCONNECT) { args ->
+                Log.w(TAG, "❌ 司機端 WebSocket 已斷開")
+                Log.w(TAG, "斷開原因: ${args.firstOrNull()}")
+                _isConnected.value = false
 
-            socket = IO.socket(Constants.WS_URL, options).apply {
-                on(Socket.EVENT_CONNECT) {
-                    Log.d(TAG, "✅ 司機端 WebSocket 已連接")
-                    _isConnected.value = true
-
-                    val onlineData = JSONObject().apply {
-                        put("driverId", driverId)
-                    }
-                    Log.d(TAG, "📤 發送 driver:online 事件: $onlineData")
-                    emit("driver:online", onlineData)
-                }
-
-                on(Socket.EVENT_DISCONNECT) {
-                    Log.w(TAG, "❌ 司機端 WebSocket 已斷開")
-                    _isConnected.value = false
-                }
-
-                on(Socket.EVENT_CONNECT_ERROR) { args ->
-                    Log.e(TAG, "❌ 司機端 WebSocket 連接錯誤")
-                    Log.e(TAG, "錯誤詳情: ${args.firstOrNull()}")
-                    _isConnected.value = false
-                }
-
-                // 監聽派單通知
-                on("order:offer") { args ->
-                    try {
-                        Log.d(TAG, "========== 收到新訂單 ==========")
-                        Log.d(TAG, "📥 收到 order:offer 事件")
-                        val data = args.firstOrNull() as? JSONObject
-                        Log.d(TAG, "原始訂單資料: $data")
-
-                        data?.let {
-                            val order = gson.fromJson(it.toString(), Order::class.java)
-                            Log.d(TAG, "✅ 訂單解析成功")
-                            Log.d(TAG, "訂單ID: ${order.orderId}")
-                            Log.d(TAG, "乘客: ${order.passengerName}")
-                            Log.d(TAG, "電話: ${order.passengerPhone}")
-                            Log.d(TAG, "上車點: ${order.pickup.address}")
-                            Log.d(TAG, "狀態: ${order.status}")
-
-                            _orderOffer.value = order
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "❌ 解析訂單失敗", e)
-                    }
-                }
-
-                // 監聽訂單狀態更新
-                on("order:status") { args ->
-                    try {
-                        Log.d(TAG, "📥 收到 order:status 事件")
-                        val data = args.firstOrNull() as? JSONObject
-                        Log.d(TAG, "狀態更新資料: $data")
-
-                        data?.let {
-                            val order = gson.fromJson(it.toString(), Order::class.java)
-                            Log.d(TAG, "✅ 訂單狀態更新: ${order.orderId} -> ${order.status}")
-                            _orderStatusUpdate.value = order
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "❌ 解析訂單狀態失敗", e)
-                    }
+                // 觸發智能重連（非手動斷開）
+                if (currentMode == ConnectionMode.DRIVER) {
+                    scheduleReconnect()
                 }
             }
 
-            Log.d(TAG, "正在連接 WebSocket...")
-            socket?.connect()
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ 初始化司機端 WebSocket 失敗", e)
+            on(Socket.EVENT_CONNECT_ERROR) { args ->
+                Log.e(TAG, "❌ 司機端 WebSocket 連接錯誤")
+                Log.e(TAG, "錯誤詳情: ${args.firstOrNull()}")
+                _isConnected.value = false
+
+                // 觸發智能重連
+                if (currentMode == ConnectionMode.DRIVER) {
+                    scheduleReconnect()
+                }
+            }
+
+            // 監聽派單通知
+            on("order:offer") { args ->
+                try {
+                    Log.d(TAG, "========== 收到新訂單 ==========")
+                    Log.d(TAG, "📥 收到 order:offer 事件")
+                    val data = args.firstOrNull() as? JSONObject
+                    Log.d(TAG, "原始訂單資料: $data")
+
+                    data?.let {
+                        val order = gson.fromJson(it.toString(), Order::class.java)
+                        Log.d(TAG, "✅ 訂單解析成功")
+                        Log.d(TAG, "訂單ID: ${order.orderId}")
+                        Log.d(TAG, "乘客: ${order.passengerName}")
+                        Log.d(TAG, "電話: ${order.passengerPhone}")
+                        Log.d(TAG, "上車點: ${order.pickup.address}")
+                        Log.d(TAG, "狀態: ${order.status}")
+
+                        _orderOffer.value = order
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析訂單失敗", e)
+                }
+            }
+
+            // 監聽訂單狀態更新
+            on("order:status") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 order:status 事件")
+                    val data = args.firstOrNull() as? JSONObject
+                    Log.d(TAG, "狀態更新資料: $data")
+
+                    data?.let {
+                        val order = gson.fromJson(it.toString(), Order::class.java)
+                        Log.d(TAG, "✅ 訂單狀態更新: ${order.orderId} -> ${order.status}")
+                        _orderStatusUpdate.value = order
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析訂單狀態失敗", e)
+                }
+            }
         }
     }
 
@@ -194,14 +262,28 @@ class WebSocketManager private constructor() {
     }
 
     /**
+     * 完全清理 Socket 連接
+     */
+    private fun cleanupSocket() {
+        socket?.let { s ->
+            Log.d(TAG, "清理 Socket 連接...")
+            s.disconnect()
+            s.off()  // 移除所有事件監聽器
+        }
+        socket = null
+        currentMode = null
+    }
+
+    /**
      * 斷開連接
      */
-    fun disconnect() {
-        socket?.disconnect()
-        socket?.off()
-        socket = null
-        _isConnected.value = false
-        Log.d(TAG, "WebSocket disconnected manually")
+    suspend fun disconnect() {
+        connectionMutex.withLock {
+            cleanupSocket()
+            _isConnected.value = false
+            isConnecting = false
+            Log.d(TAG, "WebSocket disconnected manually")
+        }
     }
 
     /**
@@ -213,125 +295,292 @@ class WebSocketManager private constructor() {
 
     /**
      * 乘客端連接到伺服器
+     * 優化版：使用 Mutex 防止競態條件，避免重複註冊事件
      */
-    fun connectAsPassenger(passengerId: String) {
-        try {
-            Log.d(TAG, "========== 乘客端WebSocket初始化 ==========")
-            Log.d(TAG, "乘客ID: $passengerId")
-            Log.d(TAG, "WebSocket URL: ${Constants.WS_URL}")
+    suspend fun connectAsPassenger(passengerId: String) {
+        connectionMutex.withLock {
+            try {
+                Log.d(TAG, "========== 乘客端WebSocket初始化 ==========")
+                Log.d(TAG, "乘客ID: $passengerId")
+                Log.d(TAG, "WebSocket URL: ${Constants.WS_URL}")
 
-            // 如果已經有連接，先斷開
-            if (socket != null) {
-                Log.w(TAG, "⚠️ 檢測到已存在的 Socket 連接，先斷開...")
-                socket?.disconnect()
-                socket?.off()  // 移除所有事件監聽
-                socket = null
+                // 檢查是否已經在連接中或已連接
+                if (isConnecting || (_isConnected.value && currentMode == ConnectionMode.PASSENGER)) {
+                    Log.w(TAG, "⚠️ WebSocket 已經在連接中或已連接，跳過重複連接")
+                    return
+                }
+
+                isConnecting = true
+
+                // 完全清理舊連接
+                cleanupSocket()
+
+                val options = IO.Options().apply {
+                    reconnection = true
+                    reconnectionDelay = Constants.WS_RECONNECT_DELAY
+                    reconnectionAttempts = Constants.WS_MAX_RECONNECT_ATTEMPTS
+                    timeout = 10000L  // 添加10秒連接超時
+                }
+
+                // 創建新的 socket 實例
+                socket = IO.socket(Constants.WS_URL, options)
+
+                // 分離事件註冊和連接，避免重複註冊
+                setupPassengerEventListeners(passengerId)
+
+                // 開始連接
+                Log.d(TAG, "正在連接 WebSocket...")
+                socket?.connect()
+
+                currentMode = ConnectionMode.PASSENGER
+                isConnecting = false
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ 初始化乘客端 WebSocket 失敗", e)
+                isConnecting = false
+            }
+        }
+    }
+
+    /**
+     * 設置乘客端事件監聽器（獨立方法，避免重複註冊）
+     * 優化版：添加智能重連機制
+     */
+    private fun setupPassengerEventListeners(passengerId: String) {
+        // 保存用戶ID用於重連
+        lastUserId = passengerId
+
+        socket?.apply {
+            // 先移除所有舊的監聽器
+            off()
+
+            on(Socket.EVENT_CONNECT) {
+                Log.d(TAG, "✅ 乘客端 WebSocket 已連接")
+                _isConnected.value = true
+                _reconnectState.value = ReconnectState.IDLE
+                currentReconnectAttempt = 0  // 重置重連計數
+
+                val onlineData = JSONObject().apply {
+                    put("passengerId", passengerId)
+                }
+                Log.d(TAG, "📤 發送 passenger:online 事件: $onlineData")
+                emit("passenger:online", onlineData)
             }
 
-            val options = IO.Options().apply {
-                reconnection = true
-                reconnectionDelay = Constants.WS_RECONNECT_DELAY
-                reconnectionAttempts = Constants.WS_MAX_RECONNECT_ATTEMPTS
+            on(Socket.EVENT_DISCONNECT) { args ->
+                Log.w(TAG, "❌ 乘客端 WebSocket 已斷開")
+                Log.w(TAG, "斷開原因: ${args.firstOrNull()}")
+                _isConnected.value = false
+
+                // 觸發智能重連（非手動斷開）
+                if (currentMode == ConnectionMode.PASSENGER) {
+                    scheduleReconnect()
+                }
             }
 
-            socket = IO.socket(Constants.WS_URL, options).apply {
-                on(Socket.EVENT_CONNECT) {
-                    Log.d(TAG, "✅ 乘客端 WebSocket 已連接")
-                    _isConnected.value = true
+            on(Socket.EVENT_CONNECT_ERROR) { args ->
+                Log.e(TAG, "❌ 乘客端 WebSocket 連接錯誤")
+                Log.e(TAG, "錯誤詳情: ${args.firstOrNull()}")
+                _isConnected.value = false
 
-                    val onlineData = JSONObject().apply {
-                        put("passengerId", passengerId)
-                    }
-                    Log.d(TAG, "📤 發送 passenger:online 事件: $onlineData")
-                    emit("passenger:online", onlineData)
+                // 觸發智能重連
+                if (currentMode == ConnectionMode.PASSENGER) {
+                    scheduleReconnect()
                 }
+            }
 
-                on(Socket.EVENT_DISCONNECT) {
-                    Log.w(TAG, "❌ 乘客端 WebSocket 已斷開")
-                    _isConnected.value = false
-                }
-
-                on(Socket.EVENT_CONNECT_ERROR) { args ->
-                    Log.e(TAG, "❌ 乘客端 WebSocket 連接錯誤")
-                    Log.e(TAG, "錯誤詳情: ${args.firstOrNull()}")
-                    _isConnected.value = false
-                }
-
-                // 監聽附近司機位置
-                on("nearby:drivers") { args ->
-                    try {
-                        Log.d(TAG, "📥 收到 nearby:drivers 事件")
-                        val data = args.firstOrNull() as? org.json.JSONArray
-                        data?.let { array ->
-                            Log.d(TAG, "司機數量: ${array.length()}")
-                            val drivers = mutableListOf<NearbyDriverInfo>()
-                            for (i in 0 until array.length()) {
-                                val driverJson = array.getJSONObject(i)
-                                val locationJson = driverJson.getJSONObject("location")
-                                drivers.add(
-                                    NearbyDriverInfo(
-                                        driverId = driverJson.getString("driverId"),
-                                        latitude = locationJson.getDouble("lat"),
-                                        longitude = locationJson.getDouble("lng"),
-                                        timestamp = driverJson.getLong("timestamp")
-                                    )
+            // 監聽附近司機位置
+            on("nearby:drivers") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 nearby:drivers 事件")
+                    val data = args.firstOrNull() as? org.json.JSONArray
+                    data?.let { array ->
+                        Log.d(TAG, "司機數量: ${array.length()}")
+                        val drivers = mutableListOf<NearbyDriverInfo>()
+                        for (i in 0 until array.length()) {
+                            val driverJson = array.getJSONObject(i)
+                            val locationJson = driverJson.getJSONObject("location")
+                            drivers.add(
+                                NearbyDriverInfo(
+                                    driverId = driverJson.getString("driverId"),
+                                    latitude = locationJson.getDouble("lat"),
+                                    longitude = locationJson.getDouble("lng"),
+                                    timestamp = driverJson.getLong("timestamp")
                                 )
-                            }
-                            Log.d(TAG, "✅ 已解析附近司機: ${drivers.size} 位")
-                            _nearbyDrivers.value = drivers
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "❌ 解析附近司機失敗", e)
-                    }
-                }
-
-                // 監聽訂單更新（乘客端）
-                on("order:update") { args ->
-                    try {
-                        Log.d(TAG, "📥 收到 order:update 事件")
-                        val data = args.firstOrNull() as? JSONObject
-                        Log.d(TAG, "訂單更新資料: $data")
-                        data?.let {
-                            val order = gson.fromJson(it.toString(), Order::class.java)
-                            Log.d(TAG, "✅ 訂單更新: ${order.orderId} -> ${order.status}")
-                            _passengerOrderUpdate.value = order
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "❌ 解析訂單更新失敗", e)
-                    }
-                }
-
-                // 監聽司機實時位置
-                on("driver:location") { args ->
-                    try {
-                        val data = args.firstOrNull() as? JSONObject
-                        data?.let {
-                            val driverLocation = DriverLocationInfo(
-                                driverId = it.getString("driverId"),
-                                latitude = it.getDouble("lat"),
-                                longitude = it.getDouble("lng"),
-                                speed = it.optDouble("speed", 0.0).toFloat(),
-                                bearing = it.optDouble("bearing", 0.0).toFloat(),
-                                timestamp = it.optLong("timestamp", System.currentTimeMillis())
                             )
-                            Log.d(TAG, "📥 收到司機位置: ${driverLocation.driverId}")
-                            _driverLocation.value = driverLocation
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "❌ 解析司機位置失敗", e)
+                        Log.d(TAG, "✅ 已解析附近司機: ${drivers.size} 位")
+                        _nearbyDrivers.value = drivers
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析附近司機失敗", e)
                 }
             }
 
-            Log.d(TAG, "正在連接 WebSocket...")
-            socket?.connect()
+            // 監聽訂單更新（乘客端）
+            on("order:update") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 order:update 事件")
+                    val data = args.firstOrNull() as? JSONObject
+                    Log.d(TAG, "訂單更新資料: $data")
+                    data?.let {
+                        val order = gson.fromJson(it.toString(), Order::class.java)
+                        Log.d(TAG, "✅ 訂單更新: ${order.orderId} -> ${order.status}")
+                        _passengerOrderUpdate.value = order
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析訂單更新失敗", e)
+                }
+            }
+
+            // 監聽司機實時位置
+            on("driver:location") { args ->
+                try {
+                    val data = args.firstOrNull() as? JSONObject
+                    data?.let {
+                        val driverLocation = DriverLocationInfo(
+                            driverId = it.getString("driverId"),
+                            latitude = it.getDouble("lat"),
+                            longitude = it.getDouble("lng"),
+                            speed = it.optDouble("speed", 0.0).toFloat(),
+                            bearing = it.optDouble("bearing", 0.0).toFloat(),
+                            timestamp = it.optLong("timestamp", System.currentTimeMillis())
+                        )
+                        Log.d(TAG, "📥 收到司機位置: ${driverLocation.driverId}")
+                        _driverLocation.value = driverLocation
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析司機位置失敗", e)
+                }
+            }
+        }
+    }
+
+    // ===== 智能重連相關方法 =====
+
+    /**
+     * 智能重連調度器
+     * 使用指數退避算法計算重連延遲
+     */
+    private fun scheduleReconnect() {
+        // 取消之前的重連任務
+        reconnectJob?.cancel()
+
+        // 檢查是否超過最大重連次數
+        if (currentReconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+            Log.e(TAG, "❌ 已達最大重連次數 ($MAX_RECONNECT_ATTEMPTS)，停止重連")
+            _reconnectState.value = ReconnectState.FAILED
+            return
+        }
+
+        // 計算指數退避延遲
+        val delay = calculateReconnectDelay(currentReconnectAttempt)
+        currentReconnectAttempt++
+
+        Log.d(TAG, "========== 智能重連調度 ==========")
+        Log.d(TAG, "重連次數: $currentReconnectAttempt / $MAX_RECONNECT_ATTEMPTS")
+        Log.d(TAG, "延遲時間: ${delay}ms")
+        Log.d(TAG, "連接模式: $currentMode")
+
+        _reconnectState.value = ReconnectState.WAITING(delay, currentReconnectAttempt)
+
+        reconnectJob = reconnectScope.launch {
+            try {
+                delay(delay)
+
+                if (isActive) {
+                    _reconnectState.value = ReconnectState.RECONNECTING(currentReconnectAttempt)
+                    performReconnect()
+                }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "重連任務被取消")
+            }
+        }
+    }
+
+    /**
+     * 計算指數退避延遲時間
+     * 公式：min(BASE_DELAY * 2^attempt, MAX_DELAY) + 隨機抖動
+     */
+    private fun calculateReconnectDelay(attempt: Int): Long {
+        val exponentialDelay = BASE_RECONNECT_DELAY * 2.0.pow(attempt.toDouble()).toLong()
+        val cappedDelay = min(exponentialDelay, MAX_RECONNECT_DELAY)
+
+        // 添加隨機抖動（0-20%），避免所有客戶端同時重連
+        val jitter = (cappedDelay * 0.2 * Math.random()).toLong()
+
+        return cappedDelay + jitter
+    }
+
+    /**
+     * 執行重連
+     */
+    private suspend fun performReconnect() {
+        val userId = lastUserId
+        val mode = currentMode
+
+        if (userId == null || mode == null) {
+            Log.e(TAG, "❌ 無法重連：缺少用戶ID或連接模式")
+            _reconnectState.value = ReconnectState.FAILED
+            return
+        }
+
+        Log.d(TAG, "🔄 執行重連... (用戶: $userId, 模式: $mode)")
+
+        // 先清理舊連接
+        cleanupSocket()
+        isConnecting = false
+
+        try {
+            when (mode) {
+                ConnectionMode.DRIVER -> connect(userId)
+                ConnectionMode.PASSENGER -> connectAsPassenger(userId)
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "❌ 初始化乘客端 WebSocket 失敗", e)
+            Log.e(TAG, "❌ 重連失敗", e)
+            // 重連失敗，繼續調度下一次重連
+            scheduleReconnect()
+        }
+    }
+
+    /**
+     * 取消重連
+     */
+    fun cancelReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        currentReconnectAttempt = 0
+        _reconnectState.value = ReconnectState.IDLE
+        Log.d(TAG, "✅ 重連已取消")
+    }
+
+    /**
+     * 手動觸發重連
+     */
+    fun manualReconnect() {
+        val userId = lastUserId
+        val mode = currentMode
+
+        if (userId == null || mode == null) {
+            Log.e(TAG, "❌ 無法手動重連：請先連接一次")
+            return
+        }
+
+        // 重置重連計數並立即重連
+        currentReconnectAttempt = 0
+        _reconnectState.value = ReconnectState.RECONNECTING(1)
+
+        reconnectScope.launch {
+            performReconnect()
         }
     }
 
     companion object {
         private const val TAG = "WebSocketManager"
+
+        // 智能重連常數
+        private const val BASE_RECONNECT_DELAY = 1000L    // 基礎延遲 1 秒
+        private const val MAX_RECONNECT_DELAY = 30000L    // 最大延遲 30 秒
+        private const val MAX_RECONNECT_ATTEMPTS = 15     // 最大重連次數
 
         @Volatile
         private var instance: WebSocketManager? = null
@@ -365,3 +614,33 @@ data class DriverLocationInfo(
     val bearing: Float,
     val timestamp: Long
 )
+
+/**
+ * 連接模式
+ */
+private enum class ConnectionMode {
+    DRIVER,
+    PASSENGER
+}
+
+/**
+ * 重連狀態
+ */
+sealed class ReconnectState {
+    /** 空閒/已連接 */
+    object IDLE : ReconnectState()
+
+    /** 等待重連中 */
+    data class WAITING(
+        val delayMs: Long,          // 等待時間（毫秒）
+        val attemptNumber: Int      // 重連次數
+    ) : ReconnectState()
+
+    /** 正在重連 */
+    data class RECONNECTING(
+        val attemptNumber: Int      // 重連次數
+    ) : ReconnectState()
+
+    /** 重連失敗（已達最大次數） */
+    object FAILED : ReconnectState()
+}

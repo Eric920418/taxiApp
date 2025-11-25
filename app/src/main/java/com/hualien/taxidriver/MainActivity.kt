@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -49,6 +50,11 @@ class MainActivity : ComponentActivity() {
         // 初始化管理器
         dataStoreManager = DataStoreManager(this)
         roleManager = RoleManager(this)
+
+        // 初始化 token 緩存（避免 AuthInterceptor 使用 runBlocking）
+        lifecycleScope.launch {
+            dataStoreManager.initializeTokenCache()
+        }
 
         enableEdgeToEdge()
         setContent {

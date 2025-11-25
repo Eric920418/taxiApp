@@ -611,19 +611,25 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
      * 連接 WebSocket（乘客端）
      */
     fun connectWebSocket(passengerId: String) {
-        webSocketManager.connectAsPassenger(passengerId)
+        viewModelScope.launch {
+            webSocketManager.connectAsPassenger(passengerId)
+        }
     }
 
     /**
      * 斷開 WebSocket 連接
      */
     fun disconnectWebSocket() {
-        webSocketManager.disconnect()
+        viewModelScope.launch {
+            webSocketManager.disconnect()
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
         hybridLocationService.stopLocationUpdates()
-        webSocketManager.disconnect()
+        viewModelScope.launch {
+            webSocketManager.disconnect()
+        }
     }
 }

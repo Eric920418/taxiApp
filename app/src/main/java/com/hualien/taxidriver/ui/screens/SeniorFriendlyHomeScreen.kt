@@ -88,7 +88,8 @@ fun SeniorFriendlyHomeScreen(
     }
 
     // 建立 WebSocket 連接（司機上線）並設置初始狀態
-    LaunchedEffect(Unit) {
+    // 使用 driverId 作為 key，確保只在 driverId 變化時才重新連接
+    LaunchedEffect(driverId) {
         viewModel.connectWebSocket(driverId)
         // 自動設置為可接單狀態
         viewModel.updateDriverStatus(driverId, DriverAvailability.AVAILABLE)

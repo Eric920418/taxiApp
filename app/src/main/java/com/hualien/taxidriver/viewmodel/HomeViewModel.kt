@@ -32,6 +32,10 @@ class HomeViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    // 追蹤 WebSocket 連接狀態，防止重複連接
+    private var connectedDriverId: String? = null
+    private var isConnecting = false
+
     init {
         android.util.Log.d("HomeViewModel", "========== HomeViewModel 初始化 ==========")
 
@@ -41,6 +45,12 @@ class HomeViewModel : ViewModel() {
             webSocketManager.isConnected.collect { isConnected ->
                 android.util.Log.d("HomeViewModel", "========== WebSocket 連接狀態變化 ==========")
                 android.util.Log.d("HomeViewModel", "連接狀態: ${if (isConnected) "✅ 已連接" else "❌ 未連接"}")
+
+                // 連接斷開時清除連接狀態
+                if (!isConnected) {
+                    connectedDriverId = null
+                    isConnecting = false
+                }
             }
         }
 
@@ -71,18 +81,47 @@ class HomeViewModel : ViewModel() {
 
     /**
      * 連接WebSocket（司機上線）
+     * 優化版：防止重複連接
      */
     fun connectWebSocket(driverId: String) {
+        // 防止重複連接：如果已經連接到相同的司機ID，跳過
+        if (connectedDriverId == driverId && webSocketManager.isConnected.value) {
+            android.util.Log.w("HomeViewModel", "⚠️ WebSocket 已連接到司機 $driverId，跳過重複連接")
+            return
+        }
+
+        // 防止重複連接：如果正在連接中，跳過
+        if (isConnecting) {
+            android.util.Log.w("HomeViewModel", "⚠️ WebSocket 正在連接中，跳過重複連接請求")
+            return
+        }
+
         android.util.Log.d("HomeViewModel", "========== 連接WebSocket ==========")
         android.util.Log.d("HomeViewModel", "司機ID: $driverId")
-        webSocketManager.connect(driverId)
+
+        isConnecting = true
+        viewModelScope.launch {
+            try {
+                webSocketManager.connect(driverId)
+                connectedDriverId = driverId
+            } catch (e: Exception) {
+                android.util.Log.e("HomeViewModel", "❌ WebSocket 連接失敗", e)
+                _uiState.value = _uiState.value.copy(
+                    error = "WebSocket 連接失敗: ${e.message}"
+                )
+            } finally {
+                isConnecting = false
+            }
+        }
     }
 
     /**
      * 斷開WebSocket（司機離線）
      */
     fun disconnectWebSocket() {
-        webSocketManager.disconnect()
+        viewModelScope.launch {
+            webSocketManager.disconnect()
+        }
     }
 
     /**

@@ -54,6 +54,9 @@ dependencies {
     // Firebase Authentication
     implementation("com.google.firebase:firebase-auth")
 
+    // Firebase Cloud Messaging (推播通知)
+    implementation("com.google.firebase:firebase-messaging")
+
     // Android核心
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

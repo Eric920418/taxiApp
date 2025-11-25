@@ -96,7 +96,8 @@ fun SimplifiedDriverScreen(
     )
 
     // 建立 WebSocket 連接（司機上線）
-    LaunchedEffect(Unit) {
+    // 使用 driverId 作為 key，確保只在 driverId 變化時才重新連接
+    LaunchedEffect(driverId) {
         viewModel.connectWebSocket(driverId)
     }
 

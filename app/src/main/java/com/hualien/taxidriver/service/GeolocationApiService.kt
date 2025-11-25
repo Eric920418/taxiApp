@@ -37,6 +37,11 @@ class GeolocationApiService(private val context: Context) {
         private const val TAG = "GeolocationApiService"
         private const val BASE_URL = "https://www.googleapis.com/"
 
+        // 用量監控常數
+        private const val COST_WARNING_THRESHOLD = 800  // 80% 免費額度（每月 10,000 次）
+        private const val COST_DANGER_THRESHOLD = 950   // 95% 免費額度
+        private const val ESTIMATED_COST_PER_REQUEST = 0.005  // 美元（每次請求約 $0.005）
+
         // 從 AndroidManifest 讀取 API Key
         private fun getApiKey(context: Context): String {
             return try {
@@ -50,9 +55,16 @@ class GeolocationApiService(private val context: Context) {
                 ""
             }
         }
+
+        // 用量統計（使用 SharedPreferences 持久化）
+        @Volatile
+        private var totalCallCount = 0L
+        private var dailyCallCount = 0
+        private var lastResetDate = ""
     }
 
     private val apiKey = getApiKey(context)
+    private val prefs = context.getSharedPreferences("geolocation_usage", Context.MODE_PRIVATE)
 
     private val retrofit = Retrofit.Builder()
         .baseUrl(BASE_URL)
@@ -61,8 +73,14 @@ class GeolocationApiService(private val context: Context) {
 
     private val api = retrofit.create(GeolocationApi::class.java)
 
+    init {
+        // 載入用量統計
+        loadUsageStats()
+    }
+
     /**
      * 使用網路信號（WiFi + 基站）進行定位
+     * 優化版：添加用量監控和成本追蹤
      *
      * @return GeolocationResult 包含位置和精度
      */
@@ -87,6 +105,9 @@ class GeolocationApiService(private val context: Context) {
                 cellTowers = cellTowers
             )
 
+            // ===== 用量追蹤：API 調用前記錄 =====
+            incrementUsageCount()
+
             val response = api.geolocate(apiKey, request)
 
             if (response.location != null) {
@@ -97,6 +118,10 @@ class GeolocationApiService(private val context: Context) {
                 )
 
                 Log.d(TAG, "Geolocation success: ${result.location}, accuracy: ${result.accuracy}m, source: ${result.source}")
+
+                // ===== 用量追蹤：成功調用後記錄統計 =====
+                logUsageStats()
+
                 Result.success(result)
             } else {
                 Log.e(TAG, "No location in response")
@@ -107,6 +132,99 @@ class GeolocationApiService(private val context: Context) {
             Log.e(TAG, "Geolocation failed", e)
             Result.failure(e)
         }
+    }
+
+    /**
+     * 載入用量統計
+     */
+    private fun loadUsageStats() {
+        totalCallCount = prefs.getLong("total_call_count", 0)
+        dailyCallCount = prefs.getInt("daily_call_count", 0)
+        lastResetDate = prefs.getString("last_reset_date", getCurrentDate()) ?: getCurrentDate()
+
+        // 檢查是否需要重置每日計數
+        val currentDate = getCurrentDate()
+        if (currentDate != lastResetDate) {
+            Log.d(TAG, "📅 新的一天，重置每日計數（前一日: $lastResetDate, 調用次數: $dailyCallCount）")
+            dailyCallCount = 0
+            lastResetDate = currentDate
+            saveUsageStats()
+        }
+
+        Log.d(TAG, "📊 Geolocation API 用量統計已載入：總計 $totalCallCount 次，今日 $dailyCallCount 次")
+    }
+
+    /**
+     * 增加用量計數
+     */
+    private fun incrementUsageCount() {
+        totalCallCount++
+        dailyCallCount++
+        saveUsageStats()
+    }
+
+    /**
+     * 保存用量統計
+     */
+    private fun saveUsageStats() {
+        prefs.edit().apply {
+            putLong("total_call_count", totalCallCount)
+            putInt("daily_call_count", dailyCallCount)
+            putString("last_reset_date", lastResetDate)
+            apply()
+        }
+    }
+
+    /**
+     * 記錄用量統計日誌（包含成本估算和警告）
+     */
+    private fun logUsageStats() {
+        val estimatedMonthlyCalls = dailyCallCount * 30  // 估算月用量
+        val estimatedMonthlyCost = estimatedMonthlyCalls * ESTIMATED_COST_PER_REQUEST
+
+        Log.d(TAG, "========== Geolocation API 用量報告 ==========")
+        Log.d(TAG, "📊 累計調用次數: $totalCallCount")
+        Log.d(TAG, "📅 今日調用次數: $dailyCallCount")
+        Log.d(TAG, "📈 估算月用量: $estimatedMonthlyCalls 次")
+        Log.d(TAG, "💰 估算月成本: $${"%.2f".format(estimatedMonthlyCost)} USD")
+
+        // 成本警告
+        when {
+            dailyCallCount * 30 >= COST_DANGER_THRESHOLD -> {
+                Log.w(TAG, "🚨 警告：估算月用量已達 ${(dailyCallCount * 30 / 10.0).toInt()}% 免費額度！")
+                Log.w(TAG, "🚨 建議：立即優化定位策略或增加冷卻時間")
+            }
+            dailyCallCount * 30 >= COST_WARNING_THRESHOLD -> {
+                Log.w(TAG, "⚠️ 注意：估算月用量已達 ${(dailyCallCount * 30 / 10.0).toInt()}% 免費額度")
+                Log.w(TAG, "⚠️ 建議：監控用量並考慮優化")
+            }
+            else -> {
+                Log.d(TAG, "✅ 用量正常（${(dailyCallCount * 30 / 10.0).toInt()}% 免費額度）")
+            }
+        }
+        Log.d(TAG, "==========================================")
+    }
+
+    /**
+     * 獲取當前日期（YYYY-MM-DD）
+     */
+    private fun getCurrentDate(): String {
+        val calendar = java.util.Calendar.getInstance()
+        return "${calendar.get(java.util.Calendar.YEAR)}-" +
+                "${(calendar.get(java.util.Calendar.MONTH) + 1).toString().padStart(2, '0')}-" +
+                "${calendar.get(java.util.Calendar.DAY_OF_MONTH).toString().padStart(2, '0')}"
+    }
+
+    /**
+     * 獲取用量統計（供外部查詢）
+     */
+    fun getUsageStats(): UsageStats {
+        return UsageStats(
+            totalCalls = totalCallCount,
+            todayCalls = dailyCallCount,
+            estimatedMonthlyCalls = dailyCallCount * 30,
+            estimatedMonthlyCost = dailyCallCount * 30 * ESTIMATED_COST_PER_REQUEST
+        )
     }
 
     /**
@@ -297,4 +415,19 @@ private data class CellTower(
 private data class GeolocationResponse(
     @SerializedName("location") val location: LocationResponse?,
     @SerializedName("accuracy") val accuracy: Double?
+)
+
+private data class LocationResponse(
+    @SerializedName("lat") val lat: Double,
+    @SerializedName("lng") val lng: Double
+)
+
+/**
+ * 用量統計資料
+ */
+data class UsageStats(
+    val totalCalls: Long,           // 累計調用次數
+    val todayCalls: Int,            // 今日調用次數
+    val estimatedMonthlyCalls: Int, // 估算月用量
+    val estimatedMonthlyCost: Double // 估算月成本（美元）
 )
