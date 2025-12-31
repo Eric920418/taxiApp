@@ -1,6 +1,7 @@
 package com.hualien.taxidriver.data.repository
 
 import com.hualien.taxidriver.data.remote.RetrofitClient
+import com.hualien.taxidriver.data.remote.dto.RejectOrderRequest
 import com.hualien.taxidriver.domain.model.Order
 
 /**
@@ -49,9 +50,9 @@ class OrderRepository {
         return try {
             val response = apiService.rejectOrder(
                 orderId = orderId,
-                body = mapOf(
-                    "driverId" to driverId,
-                    "reason" to reason
+                request = RejectOrderRequest(
+                    driverId = driverId,
+                    rejectionReason = reason
                 )
             )
 

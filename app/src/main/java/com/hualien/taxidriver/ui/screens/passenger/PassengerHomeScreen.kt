@@ -32,6 +32,7 @@ import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.*
 import com.hualien.taxidriver.R
 import com.hualien.taxidriver.ui.components.PlaceSelectionDialog
+import com.hualien.taxidriver.ui.components.RatingDialog
 import com.hualien.taxidriver.utils.Constants
 import com.hualien.taxidriver.utils.AddressUtils
 import com.hualien.taxidriver.utils.GeocodingUtils
@@ -50,10 +51,10 @@ import java.util.Locale
 fun PassengerHomeScreen(
     passengerId: String = "passenger_demo",
     passengerName: String = "測試乘客",
-    passengerPhone: String = "0911111111"
+    passengerPhone: String = "0911111111",
+    viewModel: PassengerViewModel = viewModel()  // 可從外部傳入共享的 ViewModel
 ) {
     val context = LocalContext.current
-    val viewModel: PassengerViewModel = viewModel()
     val uiState by viewModel.uiState.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -77,9 +78,13 @@ fun PassengerHomeScreen(
     var showCompletedDialog by remember { mutableStateOf(false) }
     var completedOrder by remember { mutableStateOf<com.hualien.taxidriver.domain.model.Order?>(null) }
 
+    // 司機評價對話框狀態
+    var showRatingDialog by remember { mutableStateOf(false) }
+    var ratingSubmitted by remember { mutableStateOf(false) }
+
     // 初始化附近司機和 WebSocket 連接
     LaunchedEffect(Unit) {
-        android.util.Log.d("PassengerHomeScreen", "========== PassengerHomeScreen 初始化 ==========")
+        android.util.Log.d("PassengerHomeScreen", "========== PassengerHomeScreen 地圖模式初始化 ==========")
         android.util.Log.d("PassengerHomeScreen", "乘客ID: $passengerId")
 
         android.util.Log.d("PassengerHomeScreen", "連接 WebSocket...")
@@ -456,22 +461,22 @@ fun PassengerHomeScreen(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = if (uiState.destinationAddress != null) {
+                        text = if (uiState.destinationAddress.isNotEmpty()) {
                             uiState.destinationAddress
                         } else {
                             "要去哪裡？"
                         },
-                        style = if (uiState.destinationAddress != null) {
+                        style = if (uiState.destinationAddress.isNotEmpty()) {
                             MaterialTheme.typography.bodyLarge
                         } else {
                             MaterialTheme.typography.titleMedium
                         },
-                        fontWeight = if (uiState.destinationAddress != null) {
+                        fontWeight = if (uiState.destinationAddress.isNotEmpty()) {
                             FontWeight.Normal
                         } else {
                             FontWeight.Bold
                         },
-                        color = if (uiState.destinationAddress != null) {
+                        color = if (uiState.destinationAddress.isNotEmpty()) {
                             MaterialTheme.colorScheme.onSurface
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -537,6 +542,7 @@ fun PassengerHomeScreen(
         PlaceSelectionDialog(
             title = if (dialogMode == "pickup") "選擇上車點" else "選擇目的地",
             currentLocation = uiState.currentLocation ?: hualienLocation,
+            initialQuery = "",  // 地圖模式不使用語音查詢
             onPlaceSelected = { latLng, address ->
                 // 使用搜尋選擇的地點
                 when (dialogMode) {
@@ -571,9 +577,12 @@ fun PassengerHomeScreen(
     // 上車點快速選擇對話框（選完目的地後自動顯示）
     var showPickupQuickSelect by remember { mutableStateOf(false) }
 
-    // 監聽目的地設定完成，自動詢問上車點
+    // 監聯目的地設定完成，自動詢問上車點
     LaunchedEffect(uiState.destinationLocation, uiState.pickupLocation) {
-        if (uiState.destinationLocation != null && uiState.pickupLocation == null && !showPlaceDialog) {
+        if (uiState.destinationLocation != null &&
+            uiState.pickupLocation == null &&
+            !showPlaceDialog
+        ) {
             kotlinx.coroutines.delay(300)
             showPickupQuickSelect = true
         }
@@ -738,28 +747,101 @@ fun PassengerHomeScreen(
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        showCompletedDialog = false
-                        completedOrder = null
-                        viewModel.clearOrder()
-                    },
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF4CAF50)
-                    )
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("繼續叫車", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    // 評價司機按鈕（只在有司機ID且尚未評價時顯示）
+                    if (!ratingSubmitted && completedOrder?.driverId != null) {
+                        Button(
+                            onClick = {
+                                showRatingDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFFFB300)
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("評價司機", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    // 繼續叫車按鈕
+                    Button(
+                        onClick = {
+                            showCompletedDialog = false
+                            completedOrder = null
+                            ratingSubmitted = false
+                            viewModel.clearOrder()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF4CAF50)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (ratingSubmitted) "繼續叫車" else "稍後評價，繼續叫車",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         )
     }
+
+    // 司機評價對話框
+    if (showRatingDialog && completedOrder != null) {
+        RatingDialog(
+            title = "評價司機",
+            targetName = completedOrder?.driverName ?: "司機",
+            isDriver = true,  // 乘客評價司機
+            onDismiss = {
+                showRatingDialog = false
+            },
+            onSubmit = { rating, comment ->
+                viewModel.submitDriverRating(
+                    passengerId = passengerId,
+                    orderId = completedOrder?.orderId ?: "",
+                    driverId = completedOrder?.driverId ?: "",
+                    rating = rating,
+                    comment = comment,
+                    onSuccess = {
+                        showRatingDialog = false
+                        ratingSubmitted = true
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                message = "感謝您的評價！",
+                                duration = SnackbarDuration.Short
+                            )
+                        }
+                    },
+                    onError = { errorMessage ->
+                        showRatingDialog = false
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                message = "評價失敗：$errorMessage",
+                                duration = SnackbarDuration.Short
+                            )
+                        }
+                    }
+                )
+            }
+        )
+    }
+
 }
 
 /**
@@ -1213,25 +1295,27 @@ fun OrderStatusCard(
                 }
 
                 // 上車點
-                Row(verticalAlignment = Alignment.Top) {
-                    Icon(
-                        imageVector = Icons.Default.Place,
-                        contentDescription = null,
-                        tint = Color(0xFF4CAF50),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "上車點",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                order.pickup?.let { pickup ->
+                    Row(verticalAlignment = Alignment.Top) {
+                        Icon(
+                            imageVector = Icons.Default.Place,
+                            contentDescription = null,
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(20.dp)
                         )
-                        Text(
-                            text = AddressUtils.shortenAddress(order.pickup.address ?: "未知地址", 40),
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 2
-                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "上車點",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = AddressUtils.shortenAddress(pickup.address ?: "未知地址", 40),
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 2
+                            )
+                        }
                     }
                 }
 

@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
  * @param label 輸入框標籤（例如："上車點"、"目的地"）
  * @param placeholder 輸入框提示文字
  * @param currentLocation 當前位置（用於優先顯示附近結果）
+ * @param initialQuery 初始查詢文字（例如：語音輸入的關鍵字）
  * @param onPlaceSelected 選擇地點後的回調
  * @param modifier Modifier
  */
@@ -36,6 +37,7 @@ fun PlaceSearchBar(
     label: String,
     placeholder: String = "請輸入地址或地點名稱",
     currentLocation: LatLng? = null,
+    initialQuery: String = "",
     onPlaceSelected: (PlacePrediction) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -43,7 +45,7 @@ fun PlaceSearchBar(
     val placesService = remember { PlacesApiService(context) }
     val coroutineScope = rememberCoroutineScope()
 
-    var query by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf(initialQuery) }
     var predictions by remember { mutableStateOf<List<PlacePrediction>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
     var showSuggestions by remember { mutableStateOf(false) }

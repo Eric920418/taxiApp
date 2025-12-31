@@ -58,7 +58,47 @@ data class Order(
     val cancelledBy: String? = null,
 
     @SerializedName("fare")
-    val fare: Fare? = null
+    val fare: Fare? = null,
+
+    // === 訂單派發時的距離和預估時間資訊 ===
+
+    /** 司機到上車點的距離（公里） */
+    @SerializedName("distanceToPickup")
+    val distanceToPickup: Double? = null,
+
+    /** 司機到上車點的預估時間（分鐘） */
+    @SerializedName("etaToPickup")
+    val etaToPickup: Int? = null,
+
+    /** 上車點到目的地的距離（公里），無目的地則為 null */
+    @SerializedName("tripDistance")
+    val tripDistance: Double? = null,
+
+    /** 行程預估時間（分鐘），無目的地則為 null */
+    @SerializedName("estimatedTripDuration")
+    val estimatedTripDuration: Int? = null,
+
+    // === 智能派單系統 V2 新增欄位 ===
+
+    /** 第幾批派單（1-5）*/
+    @SerializedName("batchNumber")
+    val batchNumber: Int? = null,
+
+    /** 預估車資（整數，新台幣）*/
+    @SerializedName("estimatedFare")
+    val estimatedFare: Int? = null,
+
+    /** Google API 計算的精確 ETA（秒）*/
+    @SerializedName("googleEtaSeconds")
+    val googleEtaSeconds: Int? = null,
+
+    /** 回應截止時間戳（毫秒），超過此時間訂單將轉給下一批司機 */
+    @SerializedName("responseDeadline")
+    val responseDeadline: Long? = null,
+
+    /** 派單方式：LAYERED（分層派單）/ BROADCAST（廣播）*/
+    @SerializedName("dispatchMethod")
+    val dispatchMethod: String? = null
 ) {
     /**
      * 取得狀態enum
@@ -103,5 +143,31 @@ data class Order(
         return if (startedAt != null && completedAt != null) {
             ((completedAt - startedAt) / 60000).toInt()
         } else null
+    }
+
+    /**
+     * 檢查回應時間是否已過期（智能派單 V2）
+     */
+    fun isResponseExpired(): Boolean {
+        return responseDeadline?.let { deadline ->
+            System.currentTimeMillis() > deadline
+        } ?: false
+    }
+
+    /**
+     * 取得剩餘回應時間（秒）
+     */
+    fun getRemainingResponseSeconds(): Int {
+        return responseDeadline?.let { deadline ->
+            val remaining = (deadline - System.currentTimeMillis()) / 1000
+            maxOf(0, remaining.toInt())
+        } ?: 0
+    }
+
+    /**
+     * 取得 Google ETA 的分鐘表示
+     */
+    fun getGoogleEtaMinutes(): Int? {
+        return googleEtaSeconds?.let { (it / 60).coerceAtLeast(1) }
     }
 }

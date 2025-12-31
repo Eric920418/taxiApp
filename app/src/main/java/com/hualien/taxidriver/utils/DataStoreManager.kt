@@ -13,18 +13,28 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "driver_preferences")
 
-class DataStoreManager(private val context: Context) {
+class DataStoreManager private constructor(private val context: Context) {
 
     // Token 緩存，避免 runBlocking
     private var cachedToken: String? = null
 
     companion object {
+        @Volatile
+        private var instance: DataStoreManager? = null
+
+        fun getInstance(context: Context): DataStoreManager {
+            return instance ?: synchronized(this) {
+                instance ?: DataStoreManager(context.applicationContext).also { instance = it }
+            }
+        }
+
         private val KEY_TOKEN = stringPreferencesKey("auth_token")
         private val KEY_DRIVER_ID = stringPreferencesKey(Constants.PREF_DRIVER_ID)
         private val KEY_DRIVER_NAME = stringPreferencesKey(Constants.PREF_DRIVER_NAME)
         private val KEY_DRIVER_PHONE = stringPreferencesKey(Constants.PREF_DRIVER_PHONE)
         private val KEY_DRIVER_PLATE = stringPreferencesKey("driver_plate")
         private val KEY_IS_LOGGED_IN = booleanPreferencesKey(Constants.PREF_IS_LOGGED_IN)
+        private val KEY_FCM_TOKEN = stringPreferencesKey("fcm_token")
     }
 
     // 保存登錄信息
@@ -122,6 +132,40 @@ class DataStoreManager(private val context: Context) {
         // 更新 DataStore
         context.dataStore.edit { preferences ->
             preferences[KEY_TOKEN] = newToken
+        }
+    }
+
+    // ==================== FCM Token 相關 ====================
+
+    /**
+     * 保存 FCM Token
+     */
+    suspend fun saveFcmToken(token: String) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_FCM_TOKEN] = token
+        }
+    }
+
+    /**
+     * 獲取 FCM Token
+     */
+    suspend fun getFcmToken(): String? {
+        return context.dataStore.data.first()[KEY_FCM_TOKEN]
+    }
+
+    /**
+     * 獲取司機 ID（suspend 版本）
+     */
+    suspend fun getDriverId(): String? {
+        return context.dataStore.data.first()[KEY_DRIVER_ID]
+    }
+
+    /**
+     * 清除 FCM Token
+     */
+    suspend fun clearFcmToken() {
+        context.dataStore.edit { preferences ->
+            preferences.remove(KEY_FCM_TOKEN)
         }
     }
 }

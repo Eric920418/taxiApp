@@ -7,7 +7,21 @@
       "Bash(pnpm list:*)",
       "Bash(pm2 status:*)",
       "Bash(git add:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(pnpm add:*)",
+      "Bash(ssh:*)",
+      "Bash(curl:*)",
+      "Bash(scp:*)",
+      "Bash(adb logcat:*)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb logcat -d -s PassengerHomeScreen:D PassengerViewModel:D PickupMapSelector:D)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb devices -l)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb -s BEINCQ6TKJ4PP7XC logcat -d)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb -s BEINCQ6TKJ4PP7XC logcat -d -s AndroidRuntime:E)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb -s BEINCQ6TKJ4PP7XC logcat -c)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb -s BEINCQ6TKJ4PP7XC shell am start -n com.hualien.taxidriver/.MainActivity)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb -s BEINCQ6TKJ4PP7XC logcat -d -s PassengerNavGraph:D)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb -s BEINCQ6TKJ4PP7XC logcat -d -s PassengerNavGraph:D VoiceFirstScreen:D PassengerHomeScreen:D)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb:*)"
     ],
     "deny": [],
     "ask": []

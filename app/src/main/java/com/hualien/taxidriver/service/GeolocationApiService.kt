@@ -417,10 +417,7 @@ private data class GeolocationResponse(
     @SerializedName("accuracy") val accuracy: Double?
 )
 
-private data class LocationResponse(
-    @SerializedName("lat") val lat: Double,
-    @SerializedName("lng") val lng: Double
-)
+// LocationResponse 已在 GoogleMapsApiModels.kt 中定義
 
 /**
  * 用量統計資料

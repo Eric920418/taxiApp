@@ -21,8 +21,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // BuildConfig設定
-        buildConfigField("String", "SERVER_URL", "\"http://54.180.244.231/api/\"")
-        buildConfigField("String", "WS_URL", "\"http://54.180.244.231\"")
+        buildConfigField("String", "SERVER_URL", "\"http://15.164.245.47/api/\"")
+        buildConfigField("String", "WS_URL", "\"http://15.164.245.47\"")
     }
 
     buildTypes {
@@ -68,6 +68,8 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    // Material Icons Extended（包含 PhotoCamera, DirectionsCar, ChevronRight, Help 等）
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.8.5")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
@@ -111,6 +113,9 @@ dependencies {
     // Coil圖片載入
     implementation("io.coil-kt.coil3:coil-compose:3.0.4")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
+
+    // Lottie 動畫（用於語音助手角色動畫）
+    implementation("com.airbnb.android:lottie-compose:6.6.0")
 
     // 測試
     testImplementation(libs.junit)

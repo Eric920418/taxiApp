@@ -45,7 +45,7 @@ object RetrofitClient {
      * 優化版：添加 Token 自動刷新機制
      */
     fun init(context: Context) {
-        val dataStoreManager = DataStoreManager(context.applicationContext)
+        val dataStoreManager = DataStoreManager.getInstance(context.applicationContext)
         authInterceptor = AuthInterceptor(dataStoreManager)
         tokenRefreshAuthenticator = TokenRefreshAuthenticator(dataStoreManager)
     }

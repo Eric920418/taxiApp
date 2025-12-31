@@ -1,15 +1,35 @@
 package com.hualien.taxidriver.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.hualien.taxidriver.data.remote.RetrofitClient
 import com.hualien.taxidriver.data.remote.WebSocketManager
+import com.hualien.taxidriver.data.remote.dto.DriverContext
+import com.hualien.taxidriver.data.remote.dto.VoiceCommand
+import com.hualien.taxidriver.data.remote.dto.VoiceTranscribeResponse
 import com.hualien.taxidriver.data.repository.OrderRepository
 import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.domain.model.Order
+import com.hualien.taxidriver.service.VoiceRecorderService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
+
+/**
+ * 待評分的訂單資訊
+ */
+data class PendingRating(
+    val orderId: String,
+    val passengerId: String,
+    val passengerName: String
+)
 
 /**
  * Home頁面的UI狀態
@@ -18,7 +38,14 @@ data class HomeUiState(
     val driverStatus: DriverAvailability = DriverAvailability.OFFLINE,
     val currentOrder: Order? = null,
     val isLoading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    // 評分相關
+    val pendingRating: PendingRating? = null,
+    val isSubmittingRating: Boolean = false,
+    // 語音指令相關
+    val lastTranscription: String? = null,
+    val lastVoiceCommand: VoiceCommand? = null,
+    val voiceError: String? = null
 )
 
 /**
@@ -74,6 +101,44 @@ class HomeViewModel : ViewModel() {
                     android.util.Log.d("HomeViewModel", "✅ UI 狀態已更新，訂單卡片應該顯示")
                 } else {
                     android.util.Log.d("HomeViewModel", "收到 null 訂單（可能是清除訂單）")
+                }
+            }
+        }
+
+        // 監聽訂單狀態更新（包括乘客取消訂單）
+        viewModelScope.launch {
+            android.util.Log.d("HomeViewModel", "開始監聽 WebSocket 訂單狀態更新...")
+            webSocketManager.orderStatusUpdate.collect { updatedOrder ->
+                if (updatedOrder != null) {
+                    android.util.Log.d("HomeViewModel", "========== 收到訂單狀態更新 ==========")
+                    android.util.Log.d("HomeViewModel", "訂單ID: ${updatedOrder.orderId}")
+                    android.util.Log.d("HomeViewModel", "新狀態: ${updatedOrder.status}")
+
+                    val currentOrder = _uiState.value.currentOrder
+
+                    // 如果是當前訂單的狀態更新
+                    if (currentOrder != null && currentOrder.orderId == updatedOrder.orderId) {
+                        when (updatedOrder.status.name) {
+                            "CANCELLED" -> {
+                                // 乘客取消訂單，清除當前訂單
+                                android.util.Log.d("HomeViewModel", "⚠️ 乘客已取消訂單，清除訂單卡片")
+                                _uiState.value = _uiState.value.copy(
+                                    currentOrder = null,
+                                    error = "乘客已取消訂單"
+                                )
+                                // 同時清除 WebSocket 的訂單 offer
+                                webSocketManager.clearOrderOffer()
+                            }
+                            else -> {
+                                // 其他狀態更新，更新當前訂單
+                                android.util.Log.d("HomeViewModel", "✅ 訂單狀態已更新")
+                                _uiState.value = _uiState.value.copy(
+                                    currentOrder = updatedOrder,
+                                    error = null
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -315,6 +380,11 @@ class HomeViewModel : ViewModel() {
             android.util.Log.d("HomeViewModel", "訂單ID: $orderId")
             android.util.Log.d("HomeViewModel", "車資: $meterAmount")
 
+            // 保存當前訂單資訊用於評分
+            val currentOrder = _uiState.value.currentOrder
+            val passengerId = currentOrder?.passengerId ?: ""
+            val passengerName = currentOrder?.passengerName ?: "乘客"
+
             _uiState.value = _uiState.value.copy(isLoading = true)
 
             repository.submitFare(orderId, meterAmount, appDistanceMeters = null, appDurationSeconds = null)
@@ -322,11 +392,17 @@ class HomeViewModel : ViewModel() {
                     android.util.Log.d("HomeViewModel", "✅ 車資提交成功，訂單已完成")
 
                     // 車資提交成功，訂單完成，清除當前訂單並恢復司機狀態為可接單
+                    // 同時設置待評分訂單
                     _uiState.value = _uiState.value.copy(
                         currentOrder = null,
                         driverStatus = DriverAvailability.AVAILABLE,
                         isLoading = false,
-                        error = null
+                        error = null,
+                        pendingRating = PendingRating(
+                            orderId = orderId,
+                            passengerId = passengerId,
+                            passengerName = passengerName
+                        )
                     )
 
                     // 同步更新server端的司機狀態
@@ -350,10 +426,166 @@ class HomeViewModel : ViewModel() {
     }
 
     /**
+     * 提交評分
+     */
+    fun submitRating(driverId: String, rating: Int, comment: String?) {
+        val pendingRating = _uiState.value.pendingRating ?: return
+
+        viewModelScope.launch {
+            android.util.Log.d("HomeViewModel", "========== 提交評分 ==========")
+            android.util.Log.d("HomeViewModel", "訂單ID: ${pendingRating.orderId}")
+            android.util.Log.d("HomeViewModel", "評分: $rating")
+
+            _uiState.value = _uiState.value.copy(isSubmittingRating = true)
+
+            try {
+                val request = com.hualien.taxidriver.data.remote.dto.SubmitRatingRequest(
+                    orderId = pendingRating.orderId,
+                    fromType = "driver",
+                    fromId = driverId,
+                    toType = "passenger",
+                    toId = pendingRating.passengerId,
+                    rating = rating,
+                    comment = comment
+                )
+
+                val response = com.hualien.taxidriver.data.remote.RetrofitClient.apiService.submitRating(request)
+
+                if (response.isSuccessful && response.body()?.success == true) {
+                    android.util.Log.d("HomeViewModel", "✅ 評分提交成功")
+                    _uiState.value = _uiState.value.copy(
+                        pendingRating = null,
+                        isSubmittingRating = false
+                    )
+                } else {
+                    android.util.Log.e("HomeViewModel", "❌ 評分提交失敗: ${response.body()?.error}")
+                    _uiState.value = _uiState.value.copy(
+                        pendingRating = null,
+                        isSubmittingRating = false
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("HomeViewModel", "❌ 評分提交異常: ${e.message}")
+                _uiState.value = _uiState.value.copy(
+                    pendingRating = null,
+                    isSubmittingRating = false
+                )
+            }
+        }
+    }
+
+    /**
+     * 跳過評分
+     */
+    fun skipRating() {
+        _uiState.value = _uiState.value.copy(pendingRating = null)
+    }
+
+    /**
      * 清除錯誤訊息
      */
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    // ==================== 語音指令相關 ====================
+
+    /**
+     * 上傳音檔並獲取語音指令
+     */
+    fun transcribeAudio(audioFile: File, driverId: String) {
+        viewModelScope.launch {
+            android.util.Log.d("HomeViewModel", "========== 上傳語音檔案 ==========")
+            android.util.Log.d("HomeViewModel", "檔案: ${audioFile.absolutePath}")
+            android.util.Log.d("HomeViewModel", "大小: ${audioFile.length()} bytes")
+
+            try {
+                // 準備 multipart 請求
+                val audioRequestBody = audioFile.asRequestBody("audio/m4a".toMediaTypeOrNull())
+                val audioPart = MultipartBody.Part.createFormData(
+                    "audio",
+                    audioFile.name,
+                    audioRequestBody
+                )
+
+                val driverIdBody = driverId.toRequestBody("text/plain".toMediaTypeOrNull())
+                val currentStatusBody = _uiState.value.driverStatus.name.toRequestBody("text/plain".toMediaTypeOrNull())
+
+                // 當前訂單資訊
+                val currentOrder = _uiState.value.currentOrder
+                val currentOrderIdBody = currentOrder?.orderId?.toRequestBody("text/plain".toMediaTypeOrNull())
+                val currentOrderStatusBody = currentOrder?.status?.name?.toRequestBody("text/plain".toMediaTypeOrNull())
+                val pickupAddressBody = currentOrder?.pickup?.address?.toRequestBody("text/plain".toMediaTypeOrNull())
+                val destinationAddressBody = currentOrder?.destination?.address?.toRequestBody("text/plain".toMediaTypeOrNull())
+
+                // 呼叫 API
+                val response = RetrofitClient.apiService.transcribeAudio(
+                    audio = audioPart,
+                    driverId = driverIdBody,
+                    currentStatus = currentStatusBody,
+                    currentOrderId = currentOrderIdBody,
+                    currentOrderStatus = currentOrderStatusBody,
+                    pickupAddress = pickupAddressBody,
+                    destinationAddress = destinationAddressBody
+                )
+
+                if (response.isSuccessful) {
+                    val result = response.body()
+                    if (result?.success == true && result.command != null) {
+                        android.util.Log.d("HomeViewModel", "✅ 語音轉錄成功")
+                        android.util.Log.d("HomeViewModel", "指令: ${result.command.action}")
+                        android.util.Log.d("HomeViewModel", "轉錄: ${result.command.transcription}")
+                        android.util.Log.d("HomeViewModel", "信心度: ${result.command.confidence}")
+
+                        _uiState.value = _uiState.value.copy(
+                            lastTranscription = result.command.transcription,
+                            lastVoiceCommand = result.command,
+                            voiceError = null
+                        )
+                    } else {
+                        android.util.Log.e("HomeViewModel", "❌ 語音轉錄失敗: ${result?.error}")
+                        _uiState.value = _uiState.value.copy(
+                            voiceError = result?.error ?: "語音辨識失敗"
+                        )
+                    }
+                } else {
+                    android.util.Log.e("HomeViewModel", "❌ API 錯誤: ${response.code()}")
+                    _uiState.value = _uiState.value.copy(
+                        voiceError = "伺服器錯誤 (${response.code()})"
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("HomeViewModel", "❌ 上傳失敗: ${e.message}", e)
+                _uiState.value = _uiState.value.copy(
+                    voiceError = "上傳失敗: ${e.message}"
+                )
+            } finally {
+                // 清理臨時檔案
+                try {
+                    audioFile.delete()
+                } catch (e: Exception) {
+                    // 忽略刪除錯誤
+                }
+            }
+        }
+    }
+
+    /**
+     * 清除語音指令狀態
+     */
+    fun clearVoiceCommand() {
+        _uiState.value = _uiState.value.copy(
+            lastVoiceCommand = null,
+            lastTranscription = null,
+            voiceError = null
+        )
+    }
+
+    /**
+     * 清除語音錯誤
+     */
+    fun clearVoiceError() {
+        _uiState.value = _uiState.value.copy(voiceError = null)
     }
 
     override fun onCleared() {

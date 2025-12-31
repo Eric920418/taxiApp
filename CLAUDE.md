@@ -161,8 +161,8 @@ domain/model/
 ## 重要常數與配置
 
 **Server 連線**:
-- Base URL: `http://54.180.244.231/api/`
-- WebSocket URL: `http://54.180.244.231`
+- Base URL: `http://15.164.245.47/api/`
+- WebSocket URL: `http://15.164.245.47`
 - 定義位置: `app/build.gradle.kts` (BuildConfig) → `utils/Constants.kt`
 
 **花蓮預設座標**:

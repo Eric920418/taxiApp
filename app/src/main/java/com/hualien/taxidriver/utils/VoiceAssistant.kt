@@ -21,6 +21,9 @@ class VoiceAssistant(
     private var isInitialized = false
     private val pendingMessages = mutableListOf<String>()
 
+    // 語音完成回調映射（utteranceId -> callback）
+    private val completionCallbacks = mutableMapOf<String, () -> Unit>()
+
     // 語音設定
     private var speechRate = 1.0f  // 語速（0.5-2.0）
     private var pitch = 1.0f       // 音調（0.5-2.0）
@@ -71,10 +74,18 @@ class VoiceAssistant(
 
                 override fun onDone(utteranceId: String?) {
                     Log.d("VoiceAssistant", "播放完成: $utteranceId")
+                    // 執行完成回調
+                    utteranceId?.let { id ->
+                        completionCallbacks.remove(id)?.invoke()
+                    }
                 }
 
                 override fun onError(utteranceId: String?) {
                     Log.e("VoiceAssistant", "播放錯誤: $utteranceId")
+                    // 錯誤時也移除回調
+                    utteranceId?.let { id ->
+                        completionCallbacks.remove(id)
+                    }
                 }
             })
 
@@ -89,6 +100,20 @@ class VoiceAssistant(
      * 播放語音（預設正常優先級）
      */
     fun speak(message: String, priority: Priority = Priority.NORMAL) {
+        speakWithCallback(message, priority, null)
+    }
+
+    /**
+     * 播放語音並在完成後執行回調
+     * @param message 要播放的訊息
+     * @param priority 優先級
+     * @param onComplete 播放完成後的回調（在背景線程執行）
+     */
+    fun speakWithCallback(
+        message: String,
+        priority: Priority = Priority.NORMAL,
+        onComplete: (() -> Unit)?
+    ) {
         if (message.isBlank()) return
 
         if (!isInitialized) {
@@ -96,23 +121,31 @@ class VoiceAssistant(
             return
         }
 
+        // 生成唯一的 utteranceId
+        val utteranceId = "tts_${System.currentTimeMillis()}_${message.hashCode()}"
+
+        // 註冊完成回調
+        onComplete?.let {
+            completionCallbacks[utteranceId] = it
+        }
+
         // 根據優先級調整播放策略
         when (priority) {
             Priority.LOW -> {
                 // 低優先級：排隊播放
-                speakWithQueue(message)
+                speakWithQueueAndId(message, utteranceId)
             }
             Priority.NORMAL -> {
                 // 正常優先級：排隊播放
-                speakWithQueue(message)
+                speakWithQueueAndId(message, utteranceId)
             }
             Priority.HIGH -> {
                 // 高優先級：清空隊列後播放
-                speakWithFlush(message)
+                speakWithFlushAndId(message, utteranceId)
             }
             Priority.URGENT -> {
                 // 緊急優先級：立即播放，音量加大
-                speakUrgent(message)
+                speakUrgentWithId(message, utteranceId)
             }
         }
     }
@@ -174,9 +207,16 @@ class VoiceAssistant(
     }
 
     /**
-     * 排隊播放
+     * 排隊播放（舊方法，保持兼容）
      */
     private fun speakWithQueue(message: String) {
+        speakWithQueueAndId(message, message.hashCode().toString())
+    }
+
+    /**
+     * 排隊播放（帶 utteranceId）
+     */
+    private fun speakWithQueueAndId(message: String, utteranceId: String) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             val params = Bundle().apply {
                 putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume)
@@ -185,7 +225,7 @@ class VoiceAssistant(
                 message,
                 TextToSpeech.QUEUE_ADD,
                 params,
-                message.hashCode().toString()
+                utteranceId
             )
         } else {
             @Suppress("DEPRECATION")
@@ -198,9 +238,16 @@ class VoiceAssistant(
     }
 
     /**
-     * 清空隊列後播放
+     * 清空隊列後播放（舊方法，保持兼容）
      */
     private fun speakWithFlush(message: String) {
+        speakWithFlushAndId(message, message.hashCode().toString())
+    }
+
+    /**
+     * 清空隊列後播放（帶 utteranceId）
+     */
+    private fun speakWithFlushAndId(message: String, utteranceId: String) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             val params = Bundle().apply {
                 putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume)
@@ -209,7 +256,7 @@ class VoiceAssistant(
                 message,
                 TextToSpeech.QUEUE_FLUSH,
                 params,
-                message.hashCode().toString()
+                utteranceId
             )
         } else {
             @Suppress("DEPRECATION")
@@ -222,9 +269,16 @@ class VoiceAssistant(
     }
 
     /**
-     * 緊急播放（音量加大）
+     * 緊急播放（舊方法，保持兼容）
      */
     private fun speakUrgent(message: String) {
+        speakUrgentWithId(message, "urgent_${message.hashCode()}")
+    }
+
+    /**
+     * 緊急播放（帶 utteranceId）
+     */
+    private fun speakUrgentWithId(message: String, utteranceId: String) {
         // 暫時提高音量
         val originalVolume = volume
         volume = 1.0f
@@ -241,7 +295,7 @@ class VoiceAssistant(
                 urgentMessage,
                 TextToSpeech.QUEUE_FLUSH,
                 params,
-                "urgent_${message.hashCode()}"
+                utteranceId
             )
         } else {
             @Suppress("DEPRECATION")
@@ -272,10 +326,12 @@ class VoiceAssistant(
     }
 
     /**
-     * 停止播放
+     * 停止播放並清除所有待執行的回調
      */
     fun stop() {
         textToSpeech?.stop()
+        // 清除所有待執行的回調，避免被中斷的語音播報後仍執行回調
+        completionCallbacks.clear()
     }
 
     /**

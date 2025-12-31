@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
         RetrofitClient.init(this)
 
         // 初始化管理器
-        dataStoreManager = DataStoreManager(this)
+        dataStoreManager = DataStoreManager.getInstance(this)
         roleManager = RoleManager(this)
 
         // 初始化 token 緩存（避免 AuthInterceptor 使用 runBlocking）
@@ -71,6 +71,7 @@ fun AppContent(dataStoreManager: DataStoreManager, roleManager: RoleManager) {
     val currentRole by roleManager.currentRole.collectAsState(initial = null)
     val userId by roleManager.userId.collectAsState(initial = null)
     val userName by roleManager.userName.collectAsState(initial = null)
+    val userPhone by roleManager.userPhone.collectAsState(initial = null)
 
     // 從 DataStoreManager 讀取司機登入狀態（向後兼容）
     val isDriverLoggedIn by dataStoreManager.isLoggedIn.collectAsState(initial = false)
@@ -103,6 +104,7 @@ fun AppContent(dataStoreManager: DataStoreManager, roleManager: RoleManager) {
                     PassengerNavigation(
                         passengerId = userId ?: "",
                         passengerName = userName ?: "",
+                        passengerPhone = userPhone ?: "",
                         roleManager = roleManager,
                         onSwitchToDriver = {
                             // 切換到司機角色後會自動重組

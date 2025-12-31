@@ -209,3 +209,105 @@ data class OrderHistoryResponse(
     @SerializedName("error")
     val error: String?
 )
+
+// ==================== 乘客個人資料相關 ====================
+
+/**
+ * 乘客個人資料響應
+ */
+data class PassengerProfileResponse(
+    @SerializedName("success")
+    val success: Boolean,
+    @SerializedName("passenger")
+    val passenger: PassengerProfileDto?,
+    @SerializedName("error")
+    val error: String?
+)
+
+/**
+ * 乘客個人資料
+ */
+data class PassengerProfileDto(
+    @SerializedName("passengerId")
+    val passengerId: String,
+    @SerializedName("name")
+    val name: String,
+    @SerializedName("phone")
+    val phone: String,
+    @SerializedName("email")
+    val email: String?,
+    @SerializedName("rating")
+    val rating: Float,
+    @SerializedName("totalTrips")
+    val totalTrips: Int,
+    @SerializedName("createdAt")
+    val createdAt: Long?
+)
+
+/**
+ * 更新乘客資料請求
+ */
+data class UpdatePassengerRequest(
+    @SerializedName("name")
+    val name: String? = null,
+    @SerializedName("email")
+    val email: String? = null
+)
+
+// ==================== 評價相關 ====================
+
+/**
+ * 乘客評價列表響應
+ */
+data class PassengerRatingsResponse(
+    @SerializedName("success")
+    val success: Boolean,
+    @SerializedName("ratings")
+    val ratings: List<PassengerRatingDto>,
+    @SerializedName("summary")
+    val summary: RatingSummaryDto?,
+    @SerializedName("error")
+    val error: String?
+)
+
+/**
+ * 乘客收到的評價
+ */
+data class PassengerRatingDto(
+    @SerializedName("ratingId")
+    val ratingId: String,
+    @SerializedName("orderId")
+    val orderId: String,
+    @SerializedName("driverId")
+    val driverId: String,
+    @SerializedName("driverName")
+    val driverName: String,
+    @SerializedName("rating")
+    val rating: Int,
+    @SerializedName("comment")
+    val comment: String?,
+    @SerializedName("createdAt")
+    val createdAt: Long,
+    @SerializedName("tripDate")
+    val tripDate: Long?
+)
+
+/**
+ * 評價統計摘要
+ */
+data class RatingSummaryDto(
+    @SerializedName("averageRating")
+    val averageRating: Float,
+    @SerializedName("totalRatings")
+    val totalRatings: Int,
+    @SerializedName("fiveStars")
+    val fiveStars: Int,
+    @SerializedName("fourStars")
+    val fourStars: Int,
+    @SerializedName("threeStars")
+    val threeStars: Int,
+    @SerializedName("twoStars")
+    val twoStars: Int,
+    @SerializedName("oneStar")
+    val oneStar: Int
+)

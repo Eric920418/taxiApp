@@ -52,6 +52,13 @@ class RoleManager(private val context: Context) {
     }
 
     /**
+     * 獲取用戶電話
+     */
+    val userPhone: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[USER_PHONE_KEY]
+    }
+
+    /**
      * 設置當前角色
      */
     suspend fun setCurrentRole(role: UserRole, userId: String, userName: String, phone: String) {

@@ -57,4 +57,61 @@ interface PassengerApiService {
         @Path("passengerId") passengerId: String,
         @Query("status") status: String? = null
     ): Response<OrderHistoryResponse>
+
+    /**
+     * 查詢乘客個人資料
+     * GET /api/passengers/:passengerId
+     */
+    @GET("passengers/{passengerId}")
+    suspend fun getPassengerProfile(
+        @Path("passengerId") passengerId: String
+    ): Response<PassengerProfileResponse>
+
+    /**
+     * 更新乘客個人資料
+     * PATCH /api/passengers/:passengerId
+     */
+    @PATCH("passengers/{passengerId}")
+    suspend fun updatePassengerProfile(
+        @Path("passengerId") passengerId: String,
+        @Body request: UpdatePassengerRequest
+    ): Response<PassengerProfileResponse>
+
+    /**
+     * 獲取乘客的評價列表
+     * GET /api/ratings/passenger/:passengerId
+     */
+    @GET("ratings/passenger/{passengerId}")
+    suspend fun getPassengerRatings(
+        @Path("passengerId") passengerId: String
+    ): Response<PassengerRatingsResponse>
+
+    /**
+     * 乘客對司機評分
+     * POST /api/ratings
+     */
+    @POST("ratings")
+    suspend fun submitRating(
+        @Body request: SubmitRatingRequest
+    ): Response<SubmitRatingResponse>
+
+    // ==================== 語音助理相關 ====================
+
+    /**
+     * 乘客端語音轉錄 + 意圖解析
+     * 使用 multipart/form-data 上傳音檔
+     * POST /api/whisper/transcribe-passenger
+     */
+    @Multipart
+    @POST("whisper/transcribe-passenger")
+    suspend fun transcribePassengerAudio(
+        @Part audio: okhttp3.MultipartBody.Part,
+        @Part("passengerId") passengerId: okhttp3.RequestBody,
+        @Part("hasActiveOrder") hasActiveOrder: okhttp3.RequestBody,
+        @Part("orderStatus") orderStatus: okhttp3.RequestBody?,
+        @Part("currentPickupAddress") currentPickupAddress: okhttp3.RequestBody?,
+        @Part("currentDestinationAddress") currentDestinationAddress: okhttp3.RequestBody?,
+        @Part("driverName") driverName: okhttp3.RequestBody?,
+        @Part("driverPhone") driverPhone: okhttp3.RequestBody?
+    ): Response<PassengerVoiceTranscribeResponse>
 }

@@ -38,7 +38,7 @@ class WebSocketManager private constructor() {
     private var lastUserId: String? = null  // 記住上次連接的用戶ID，用於自動重連
 
     // 重連狀態
-    private val _reconnectState = MutableStateFlow(ReconnectState.IDLE)
+    private val _reconnectState = MutableStateFlow<ReconnectState>(ReconnectState.IDLE)
     val reconnectState: StateFlow<ReconnectState> = _reconnectState.asStateFlow()
 
     // 連接狀態
@@ -52,6 +52,10 @@ class WebSocketManager private constructor() {
     // 訂單狀態更新
     private val _orderStatusUpdate = MutableStateFlow<Order?>(null)
     val orderStatusUpdate: StateFlow<Order?> = _orderStatusUpdate.asStateFlow()
+
+    // 智能派單 V2：批次超時通知
+    private val _batchTimeout = MutableStateFlow<BatchTimeoutInfo?>(null)
+    val batchTimeout: StateFlow<BatchTimeoutInfo?> = _batchTimeout.asStateFlow()
 
     // 乘客端：附近司機列表
     private val _nearbyDrivers = MutableStateFlow<List<NearbyDriverInfo>>(emptyList())
@@ -179,6 +183,13 @@ class WebSocketManager private constructor() {
                         Log.d(TAG, "電話: ${order.passengerPhone}")
                         Log.d(TAG, "上車點: ${order.pickup.address}")
                         Log.d(TAG, "狀態: ${order.status}")
+                        // 距離和預估時間資訊
+                        order.distanceToPickup?.let { d ->
+                            Log.d(TAG, "到客人: ${d}km, 約${order.etaToPickup}分鐘")
+                        }
+                        order.tripDistance?.let { d ->
+                            Log.d(TAG, "行程: ${d}km, 約${order.estimatedTripDuration}分鐘")
+                        }
 
                         _orderOffer.value = order
                     }
@@ -201,6 +212,34 @@ class WebSocketManager private constructor() {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ 解析訂單狀態失敗", e)
+                }
+            }
+
+            // 智能派單 V2：監聽批次超時
+            on("order:batch-timeout") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 order:batch-timeout 事件")
+                    val data = args.firstOrNull() as? JSONObject
+                    Log.d(TAG, "批次超時資料: $data")
+
+                    data?.let {
+                        val timeoutInfo = BatchTimeoutInfo(
+                            orderId = it.getString("orderId"),
+                            message = it.optString("message", "回應時間已過")
+                        )
+                        Log.d(TAG, "⏰ 訂單 ${timeoutInfo.orderId} 已超時: ${timeoutInfo.message}")
+
+                        // 清除當前訂單 offer（該訂單已轉給下一批司機）
+                        _orderOffer.value?.let { currentOrder ->
+                            if (currentOrder.orderId == timeoutInfo.orderId) {
+                                _orderOffer.value = null
+                            }
+                        }
+
+                        _batchTimeout.value = timeoutInfo
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析批次超時失敗", e)
                 }
             }
         }
@@ -291,6 +330,13 @@ class WebSocketManager private constructor() {
      */
     fun clearOrderOffer() {
         _orderOffer.value = null
+    }
+
+    /**
+     * 清除批次超時通知
+     */
+    fun clearBatchTimeout() {
+        _batchTimeout.value = null
     }
 
     /**
@@ -644,3 +690,11 @@ sealed class ReconnectState {
     /** 重連失敗（已達最大次數） */
     object FAILED : ReconnectState()
 }
+
+/**
+ * 智能派單 V2：批次超時資訊
+ */
+data class BatchTimeoutInfo(
+    val orderId: String,
+    val message: String
+)

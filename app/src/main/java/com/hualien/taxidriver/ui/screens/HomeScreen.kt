@@ -27,6 +27,7 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.ui.components.FareDialog
+import com.hualien.taxidriver.ui.components.RatingDialog
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 
 /**
@@ -196,6 +197,83 @@ fun HomeScreen(
                             text = order.passengerPhone ?: "未提供電話",
                             style = MaterialTheme.typography.bodyMedium
                         )
+                    }
+
+                    // 距離和時間資訊（如果有）
+                    if (order.distanceToPickup != null || order.tripDistance != null) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                // 到客人的距離和時間
+                                order.distanceToPickup?.let { distance ->
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = "🚗 到客人",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Text(
+                                            text = "${distance} km",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        order.etaToPickup?.let { eta ->
+                                            Text(
+                                                text = "約 $eta 分鐘",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // 分隔線（如果兩者都有的話）
+                                if (order.distanceToPickup != null && order.tripDistance != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(1.dp)
+                                            .height(50.dp)
+                                            .background(MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f))
+                                    )
+                                }
+
+                                // 行程距離和時間
+                                order.tripDistance?.let { distance ->
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = "📍 行程",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Text(
+                                            text = "${distance} km",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        order.estimatedTripDuration?.let { duration ->
+                                            Text(
+                                                text = "約 $duration 分鐘",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // 上車點
@@ -391,12 +469,26 @@ fun HomeScreen(
     if (showFareDialog) {
         FareDialog(
             onDismiss = { showFareDialog = false },
-            onConfirm = { meterAmount ->
+            onConfirm = { meterAmount, photoUri ->
                 currentOrderIdForFare?.let { orderId ->
+                    // TODO: 未來實作照片上傳功能
                     viewModel.submitFare(orderId, driverId, meterAmount)
                 }
                 showFareDialog = false
                 currentOrderIdForFare = null
+            }
+        )
+    }
+
+    // 評分對話框 - 訂單完成後顯示
+    uiState.pendingRating?.let { pendingRating ->
+        RatingDialog(
+            title = "評價乘客",
+            targetName = pendingRating.passengerName,
+            isDriver = false,
+            onDismiss = { viewModel.skipRating() },
+            onSubmit = { rating, comment ->
+                viewModel.submitRating(driverId, rating, comment)
             }
         )
     }

@@ -35,8 +35,15 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.manager.NextAction
 import com.hualien.taxidriver.manager.SmartOrderManager
 import com.hualien.taxidriver.manager.SmartOrderState
+import com.hualien.taxidriver.data.remote.dto.VoiceAction
+import com.hualien.taxidriver.domain.model.Order
+import com.hualien.taxidriver.domain.model.OrderStatus
+import com.hualien.taxidriver.service.VoiceRecorderService
 import com.hualien.taxidriver.ui.components.FareDialog
+import com.hualien.taxidriver.ui.components.RatingDialog
+import com.hualien.taxidriver.ui.components.VoiceCommandButton
 import com.hualien.taxidriver.utils.VoiceAssistant
+import com.hualien.taxidriver.utils.VoiceCommandHandler
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -63,8 +70,16 @@ fun SimplifiedDriverScreen(
     val smartOrderManager = remember { SmartOrderManager() }
     val orderState by smartOrderManager.orderState.collectAsState()
 
-    // 語音助理
+    // 語音助理（TTS 播報）
     val voiceAssistant = remember { VoiceAssistant(context) }
+
+    // 語音錄製服務
+    val voiceRecorderService = remember { VoiceRecorderService(context) }
+    val recordingState by voiceRecorderService.state.collectAsState()
+    val amplitude by voiceRecorderService.amplitude.collectAsState()
+
+    // 語音指令處理器
+    val voiceCommandHandler = remember { VoiceCommandHandler(context, voiceAssistant) }
 
     // UI狀態
     val uiState by viewModel.uiState.collectAsState()
@@ -105,6 +120,96 @@ fun SimplifiedDriverScreen(
     DisposableEffect(Unit) {
         onDispose {
             viewModel.disconnectWebSocket()
+            voiceRecorderService.release()
+        }
+    }
+
+    // 設置語音指令處理器回調
+    LaunchedEffect(Unit) {
+        voiceCommandHandler.setCallback(object : VoiceCommandHandler.CommandCallback {
+            override fun onAcceptOrder(orderId: String?) {
+                (orderState as? SmartOrderState.WaitingForAccept)?.let { state ->
+                    viewModel.acceptOrder(state.order.orderId, driverId, driverName)
+                    smartOrderManager.executeNextAction()
+                }
+            }
+
+            override fun onRejectOrder(orderId: String?, reason: String?) {
+                (orderState as? SmartOrderState.WaitingForAccept)?.let { state ->
+                    viewModel.rejectOrder(state.order.orderId, driverId, reason ?: "司機不便接單")
+                    smartOrderManager.reset()
+                }
+            }
+
+            override fun onMarkArrived(orderId: String?) {
+                (orderState as? SmartOrderState.NavigatingToPickup)?.let { state ->
+                    viewModel.markArrived(state.order.orderId)
+                    smartOrderManager.executeNextAction()
+                }
+            }
+
+            override fun onStartTrip(orderId: String?) {
+                (orderState as? SmartOrderState.ArrivedAtPickup)?.let { state ->
+                    viewModel.startTrip(state.order.orderId)
+                    smartOrderManager.executeNextAction()
+                }
+            }
+
+            override fun onEndTrip(orderId: String?) {
+                (orderState as? SmartOrderState.OnTrip)?.let { state ->
+                    viewModel.endTrip(state.order.orderId)
+                    smartOrderManager.executeNextAction()
+                }
+            }
+
+            override fun onUpdateStatus(status: DriverAvailability) {
+                viewModel.updateDriverStatus(driverId, status)
+            }
+
+            override fun onQueryEarnings() {
+                voiceAssistant.speak("收入查詢功能開發中")
+            }
+
+            override fun onNavigate(destination: String?) {
+                val currentOrder = uiState.currentOrder
+                val navDest = destination ?: when (currentOrder?.status) {
+                    OrderStatus.ACCEPTED, OrderStatus.ARRIVED -> currentOrder.pickup.address
+                    OrderStatus.ON_TRIP -> currentOrder.destination?.address
+                    else -> null
+                }
+                if (navDest != null) {
+                    voiceAssistant.speak("正在開啟導航")
+                    // TODO: 實際開啟導航
+                } else {
+                    voiceAssistant.speak("沒有可導航的目的地")
+                }
+            }
+
+            override fun onEmergency() {
+                voiceAssistant.speak("緊急求助功能開發中")
+            }
+
+            override fun getCurrentOrder(): Order? = uiState.currentOrder
+
+            override fun getCurrentStatus(): DriverAvailability = uiState.driverStatus
+        })
+    }
+
+    // 處理語音指令結果
+    LaunchedEffect(uiState.lastVoiceCommand) {
+        uiState.lastVoiceCommand?.let { command ->
+            voiceRecorderService.resetState()
+            val result = voiceCommandHandler.handleCommand(command)
+            viewModel.clearVoiceCommand()
+        }
+    }
+
+    // 處理語音錯誤
+    LaunchedEffect(uiState.voiceError) {
+        uiState.voiceError?.let { error ->
+            voiceRecorderService.resetState()
+            voiceAssistant.speak(error)
+            viewModel.clearVoiceError()
         }
     }
 
@@ -225,18 +330,54 @@ fun SimplifiedDriverScreen(
         ) {
             AutoHintBanner(orderState = orderState)
         }
+
+        // 語音指令按鈕（右下角）
+        VoiceCommandButton(
+            recordingState = recordingState,
+            amplitude = amplitude,
+            onStartRecording = {
+                voiceRecorderService.startRecording { audioFile ->
+                    // 錄音完成，上傳到 server
+                    viewModel.transcribeAudio(audioFile, driverId)
+                }
+            },
+            onStopRecording = {
+                voiceRecorderService.stopRecording()
+            },
+            onCancelRecording = {
+                voiceRecorderService.cancelRecording()
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(24.dp),
+            enabled = uiState.driverStatus != DriverAvailability.OFFLINE
+        )
     }
 
     // 車資對話框
     if (showFareDialog) {
         FareDialog(
             onDismiss = { showFareDialog = false },
-            onConfirm = { meterAmount ->
+            onConfirm = { meterAmount, photoUri ->
                 (orderState as? SmartOrderState.WaitingForPayment)?.let { state ->
+                    // TODO: 未來實作照片上傳功能
                     viewModel.submitFare(state.order.orderId, driverId, meterAmount)
                     smartOrderManager.completeOrder()
                 }
                 showFareDialog = false
+            }
+        )
+    }
+
+    // 評分對話框 - 訂單完成後顯示
+    uiState.pendingRating?.let { pendingRating ->
+        RatingDialog(
+            title = "評價乘客",
+            targetName = pendingRating.passengerName,
+            isDriver = false,
+            onDismiss = { viewModel.skipRating() },
+            onSubmit = { rating, comment ->
+                viewModel.submitRating(driverId, rating, comment)
             }
         )
     }
@@ -340,6 +481,75 @@ fun StatusDisplay(
                             fontSize = 20.sp,
                             color = Color(0xFF4CAF50)
                         )
+                    }
+                }
+
+                is SmartOrderState.WaitingForAccept -> {
+                    // 顯示距離和時間資訊
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 上車點地址
+                    Text(
+                        text = "📍 ${orderState.order.pickup.address ?: "未知地址"}",
+                        fontSize = 20.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 距離和時間資訊（一行顯示）
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(24.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 到客人距離
+                        orderState.order.distanceToPickup?.let { distance ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "🚗 到客人",
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "${distance} km",
+                                    fontSize = 28.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                orderState.order.etaToPickup?.let { eta ->
+                                    Text(
+                                        text = "約 $eta 分鐘",
+                                        fontSize = 16.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        // 行程距離（如果有目的地）
+                        orderState.order.tripDistance?.let { distance ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "📍 行程",
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "${distance} km",
+                                    fontSize = 28.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                                orderState.order.estimatedTripDuration?.let { duration ->
+                                    Text(
+                                        text = "約 $duration 分鐘",
+                                        fontSize = 16.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -641,11 +851,9 @@ fun startLocationTracking(
     fusedLocationClient: FusedLocationProviderClient,
     smartOrderManager: SmartOrderManager
 ) {
-    val locationRequest = LocationRequest.create().apply {
-        interval = 3000  // 3秒更新一次
-        fastestInterval = 1000
-        priority = LocationRequest.PRIORITY_HIGH_ACCURACY
-    }
+    val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3000)
+        .setMinUpdateIntervalMillis(1000)
+        .build()
 
     val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {

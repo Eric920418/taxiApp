@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +29,7 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.ui.components.FareDialog
+import com.hualien.taxidriver.ui.components.RatingDialog
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
 
@@ -292,12 +294,26 @@ fun SeniorFriendlyHomeScreen(
     if (showFareDialog) {
         FareDialog(
             onDismiss = { showFareDialog = false },
-            onConfirm = { meterAmount ->
+            onConfirm = { meterAmount, photoUri ->
                 currentOrderIdForFare?.let { orderId ->
+                    // TODO: 未來實作照片上傳功能
                     viewModel.submitFare(orderId, driverId, meterAmount)
                 }
                 showFareDialog = false
                 currentOrderIdForFare = null
+            }
+        )
+    }
+
+    // 評分對話框 - 訂單完成後顯示
+    uiState.pendingRating?.let { pendingRating ->
+        RatingDialog(
+            title = "評價乘客",
+            targetName = pendingRating.passengerName,
+            isDriver = false,
+            onDismiss = { viewModel.skipRating() },
+            onSubmit = { rating, comment ->
+                viewModel.submitRating(driverId, rating, comment)
             }
         )
     }
@@ -472,6 +488,76 @@ fun SeniorFriendlyOrderCard(
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Medium
                         )
+                    }
+                }
+            }
+
+            // 距離和時間資訊（超大字體給中老年人）
+            if (order.distanceToPickup != null || order.tripDistance != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFFFF3E0)  // 淡橘色背景
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 到客人距離
+                        order.distanceToPickup?.let { distance ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "🚗 到客人",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE65100)
+                                )
+                                Text(
+                                    text = "${distance} 公里",
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE65100)
+                                )
+                                order.etaToPickup?.let { eta ->
+                                    Text(
+                                        text = "約 $eta 分鐘",
+                                        fontSize = 22.sp,
+                                        color = Color(0xFFBF360C)
+                                    )
+                                }
+                            }
+                        }
+
+                        // 行程距離（如果有目的地）
+                        order.tripDistance?.let { distance ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "📍 全程",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1565C0)
+                                )
+                                Text(
+                                    text = "${distance} 公里",
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1565C0)
+                                )
+                                order.estimatedTripDuration?.let { duration ->
+                                    Text(
+                                        text = "約 $duration 分鐘",
+                                        fontSize = 22.sp,
+                                        color = Color(0xFF0D47A1)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -814,7 +900,7 @@ fun SeniorFriendlyStatusControl(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    imageVector = Icons.Default.ExitToApp,
+                    imageVector = Icons.AutoMirrored.Filled.ExitToApp,
                     contentDescription = "離線",
                     modifier = Modifier.size(32.dp)
                 )

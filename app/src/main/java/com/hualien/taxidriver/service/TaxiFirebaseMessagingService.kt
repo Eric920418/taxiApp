@@ -14,11 +14,15 @@ import com.google.firebase.messaging.RemoteMessage
 import com.hualien.taxidriver.MainActivity
 import com.hualien.taxidriver.R
 import com.hualien.taxidriver.data.remote.RetrofitClient
+import com.hualien.taxidriver.data.remote.dto.DeviceInfo
+import com.hualien.taxidriver.data.remote.dto.UpdateFcmTokenRequest
 import com.hualien.taxidriver.utils.DataStoreManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 /**
  * Firebase Cloud Messaging 服務
@@ -278,13 +282,37 @@ class TaxiFirebaseMessagingService : FirebaseMessagingService() {
     private fun sendTokenToServer(token: String) {
         serviceScope.launch {
             try {
-                // TODO: 實現後端 API 調用
-                // 需要在 ApiService 中添加對應的 endpoint
-                // RetrofitClient.apiService.updateFcmToken(driverId, token)
+                // 先保存到本地
+                val dataStore = DataStoreManager.getInstance(applicationContext)
+                dataStore.saveFcmToken(token)
 
-                Log.d(TAG, "FCM Token 已準備發送到伺服器")
-                // 暫時保存到本地，等待後端 API 實現
-                // 可以使用 DataStoreManager 保存
+                // 取得當前登入的司機 ID
+                val driverId = dataStore.getDriverId()
+
+                if (driverId.isNullOrEmpty()) {
+                    Log.d(TAG, "用戶尚未登入，FCM Token 已保存到本地，等待登入後同步")
+                    return@launch
+                }
+
+                // 發送到後端
+                val deviceInfo = DeviceInfo(
+                    model = Build.MODEL,
+                    os = "Android",
+                    version = Build.VERSION.RELEASE
+                )
+
+                val request = UpdateFcmTokenRequest(
+                    fcmToken = token,
+                    deviceInfo = deviceInfo
+                )
+
+                val response = RetrofitClient.apiService.updateFcmToken(driverId, request)
+
+                if (response.isSuccessful && response.body()?.success == true) {
+                    Log.d(TAG, "✅ FCM Token 已同步到伺服器")
+                } else {
+                    Log.e(TAG, "FCM Token 同步失敗: ${response.body()?.error}")
+                }
 
             } catch (e: Exception) {
                 Log.e(TAG, "發送 FCM Token 失敗", e)
@@ -318,6 +346,68 @@ object FcmTokenManager {
     }
 
     /**
+     * 登入後同步 FCM Token 到伺服器
+     * 應該在用戶成功登入後調用
+     */
+    suspend fun syncTokenAfterLogin(context: Context, driverId: String) {
+        try {
+            val dataStore = DataStoreManager.getInstance(context)
+
+            // 先檢查是否有本地保存的 Token
+            var fcmToken = dataStore.getFcmToken()
+
+            // 如果沒有，則獲取新的
+            if (fcmToken.isNullOrEmpty()) {
+                fcmToken = com.google.firebase.messaging.FirebaseMessaging.getInstance()
+                    .token.await()
+                dataStore.saveFcmToken(fcmToken)
+            }
+
+            // 發送到伺服器
+            val deviceInfo = DeviceInfo(
+                model = Build.MODEL,
+                os = "Android",
+                version = Build.VERSION.RELEASE
+            )
+
+            val request = UpdateFcmTokenRequest(
+                fcmToken = fcmToken,
+                deviceInfo = deviceInfo
+            )
+
+            val response = RetrofitClient.apiService.updateFcmToken(driverId, request)
+
+            if (response.isSuccessful && response.body()?.success == true) {
+                Log.d(TAG, "✅ FCM Token 已同步到伺服器 (登入後)")
+            } else {
+                Log.e(TAG, "FCM Token 同步失敗: ${response.body()?.error}")
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "登入後同步 FCM Token 失敗", e)
+        }
+    }
+
+    /**
+     * 登出時清除伺服器上的 FCM Token
+     */
+    suspend fun clearTokenOnLogout(context: Context, driverId: String) {
+        try {
+            val response = RetrofitClient.apiService.deleteFcmToken(driverId)
+
+            if (response.isSuccessful && response.body()?.success == true) {
+                Log.d(TAG, "✅ FCM Token 已從伺服器刪除")
+            }
+
+            // 同時清除本地
+            DataStoreManager.getInstance(context).clearFcmToken()
+
+        } catch (e: Exception) {
+            Log.e(TAG, "刪除 FCM Token 失敗", e)
+        }
+    }
+
+    /**
      * 訂閱主題（例如：所有司機）
      */
     fun subscribeToTopic(topic: String) {
@@ -346,4 +436,5 @@ object FcmTokenManager {
                 }
             }
     }
+
 }

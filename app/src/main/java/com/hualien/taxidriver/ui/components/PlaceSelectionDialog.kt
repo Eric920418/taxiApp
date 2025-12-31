@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
  *
  * @param title 對話框標題（例如："選擇上車點"）
  * @param currentLocation 當前位置（用於優先顯示附近結果）
+ * @param initialQuery 初始查詢文字（例如：語音輸入的關鍵字，自動搜尋）
  * @param onPlaceSelected 選擇地點後的回調（傳回 LatLng 和 地址字串）
  * @param onMapSelectionRequest 請求在地圖上選擇的回調
  * @param onDismiss 關閉對話框的回調
@@ -33,6 +34,7 @@ import kotlinx.coroutines.launch
 fun PlaceSelectionDialog(
     title: String,
     currentLocation: LatLng? = null,
+    initialQuery: String = "",
     onPlaceSelected: (LatLng, String) -> Unit,
     onMapSelectionRequest: () -> Unit,
     onDismiss: () -> Unit
@@ -89,6 +91,7 @@ fun PlaceSelectionDialog(
                     label = "搜尋地址",
                     placeholder = "輸入地點名稱或地址",
                     currentLocation = currentLocation,
+                    initialQuery = initialQuery,
                     onPlaceSelected = { prediction ->
                         // 獲取地點詳細資訊（包含座標）
                         coroutineScope.launch {

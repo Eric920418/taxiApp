@@ -250,6 +250,14 @@ class SmartOrderManager {
     }
 
     /**
+     * 重置狀態（拒單或取消時使用）
+     */
+    fun reset() {
+        currentOrder = null
+        _orderState.value = SmartOrderState.NoOrder
+    }
+
+    /**
      * 更新訂單狀態
      */
     private fun updateOrderState() {

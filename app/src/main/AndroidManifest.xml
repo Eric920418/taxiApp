@@ -24,6 +24,10 @@
     <!-- 相機權限 -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- 錄音權限（語音助理） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <!-- 推播通知權限 (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
