@@ -13,3 +13,11 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Signing keys - 絕對不要提交到 git
+*.jks
+*.keystore
+keystore.properties
+
+# Firebase service account key
+*-service-account.json

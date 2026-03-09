@@ -8,6 +8,8 @@ import com.hualien.taxidriver.data.remote.RetrofitClient
 import com.hualien.taxidriver.data.remote.WebSocketManager
 import com.hualien.taxidriver.data.remote.dto.PassengerVoiceCommand
 import com.hualien.taxidriver.data.remote.dto.SubmitRatingRequest
+import com.hualien.taxidriver.data.remote.dto.VoiceChatMessage
+import com.hualien.taxidriver.data.remote.dto.VoiceChatState
 import com.hualien.taxidriver.data.repository.OrderRepository
 import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.service.DirectionsApiService
@@ -23,8 +25,10 @@ import com.hualien.taxidriver.service.PlaceDetails
 import com.hualien.taxidriver.service.PlacePrediction
 import com.hualien.taxidriver.utils.FareCalculator
 import com.hualien.taxidriver.utils.FareResult
+import com.hualien.taxidriver.utils.PassengerNotificationHelper
 import com.hualien.taxidriver.utils.PassengerVoiceCommandHandler
 import com.hualien.taxidriver.utils.VoiceAssistant
+import com.hualien.taxidriver.utils.VoiceChatManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,6 +65,7 @@ enum class VoiceRecordingStatus {
 enum class VoiceAutoflowState {
     IDLE,                      // 閒置
     SEARCHING_DESTINATION,     // 正在搜尋目的地
+    ASKING_TRAIN_TIME,         // 詢問火車時間（火車站專用）
     CONFIRMING_DESTINATION,    // 等待用戶確認目的地
     SELECTING_PICKUP,          // 用戶正在選擇上車點（Uber風格地圖）
     BOOKING                    // 正在叫車
@@ -107,9 +112,17 @@ data class PassengerUiState(
     val pendingDestinationDetails: PlaceDetails? = null,    // 待確認的目的地詳情
     val showPickupMapSelector: Boolean = false,             // 顯示 Uber 風格地圖選點
 
-    // 對話泡泡狀態
-    val currentSpeechText: String? = null,                  // 小橘當前說的話（顯示在對話泡泡中）
-    val isSpeaking: Boolean = false,                        // 小橘是否正在說話
+    // 語音狀態
+    val currentSpeechText: String? = null,                  // 當前語音文字（顯示在畫面上）
+    val isSpeaking: Boolean = false,                        // 是否正在播放語音
+
+    // 司機 ETA 追蹤（用於語音廣播）
+    val driverToPickupDistanceMeters: Float? = null,        // 司機到上車點的距離（公尺）
+    val driverToPickupEtaMinutes: Int? = null,              // 司機到上車點的預估時間（分鐘）
+    val initialDriverDistance: Float? = null,               // 司機接單時的初始距離
+    val etaAnnouncedInitial: Boolean = false,               // 已廣播：初始 ETA
+    val etaAnnouncedHalfway: Boolean = false,               // 已廣播：一半距離
+    val etaAnnouncedOneKm: Boolean = false,                 // 已廣播：剩餘 1 公里
 
     // UI狀態
     val isLoading: Boolean = false,
@@ -152,6 +165,28 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
     private val voiceAssistant = VoiceAssistant(application)
     private val voiceRecorderService = VoiceRecorderService(application)
     private val voiceCommandHandler = PassengerVoiceCommandHandler(application, voiceAssistant)
+
+    // 語音對講管理器
+    private val voiceChatManager = VoiceChatManager(
+        context = application,
+        voiceAssistant = voiceAssistant,
+        voiceRecorderService = voiceRecorderService,
+        webSocketManager = webSocketManager
+    )
+
+    // 語音對講狀態（暴露給 UI）
+    val voiceChatHistory: StateFlow<List<VoiceChatMessage>> = voiceChatManager.chatHistory
+    val voiceChatState: StateFlow<VoiceChatState> = voiceChatManager.state
+    val voiceChatRecording: StateFlow<Boolean> = voiceChatManager.isRecording
+    val voiceChatAmplitude: StateFlow<Int> = voiceChatManager.amplitude
+
+    // 語音對講面板顯示狀態
+    private val _showVoiceChatPanel = MutableStateFlow(false)
+    val showVoiceChatPanel: StateFlow<Boolean> = _showVoiceChatPanel.asStateFlow()
+
+    // 語音對講未讀訊息數
+    private val _voiceChatUnreadCount = MutableStateFlow(0)
+    val voiceChatUnreadCount: StateFlow<Int> = _voiceChatUnreadCount.asStateFlow()
 
     // 地點搜尋服務（語音自動流程）
     private val placesApiService = PlacesApiService(application)
@@ -264,7 +299,7 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
-        // 監聽司機實時位置（實時更新地圖標記）
+        // 監聯司機實時位置（實時更新地圖標記 + ETA 廣播）
         viewModelScope.launch {
             webSocketManager.driverLocation.collect { driverLocation ->
                 driverLocation?.let { location ->
@@ -297,7 +332,63 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
                             _uiState.value = _uiState.value.copy(nearbyDrivers = updatedDrivers)
                         }
                     }
-                    // 註：新司機由 nearby:drivers 事件負責添加，這裡不處理
+
+                    // 【ETA 廣播】如果有進行中的訂單，計算司機到上車點的距離
+                    val orderStatus = _uiState.value.orderStatus
+                    val currentOrder = _uiState.value.currentOrder
+                    val pickup = _uiState.value.pickupLocation
+
+                    if (orderStatus in listOf(OrderStatus.ACCEPTED, OrderStatus.DRIVER_ARRIVING) &&
+                        currentOrder != null &&
+                        pickup != null &&
+                        currentOrder.driverId == location.driverId) {
+
+                        // 優先使用後端計算的距離和 ETA，否則本地計算
+                        val distanceMeters: Float
+                        val etaMinutes: Int
+
+                        if (location.distanceToPickup != null && location.etaMinutes != null) {
+                            // 使用後端傳來的精確數據
+                            distanceMeters = location.distanceToPickup.toFloat()
+                            etaMinutes = location.etaMinutes
+                            android.util.Log.d(TAG, "使用後端 ETA: 距離=${distanceMeters}m, ETA=${etaMinutes}分")
+                        } else {
+                            // 本地計算（備援）
+                            val driverLatLng = LatLng(location.latitude, location.longitude)
+                            distanceMeters = calculateDistanceMeters(driverLatLng, pickup)
+                            etaMinutes = (distanceMeters / 500).toInt().coerceAtLeast(1)
+                            android.util.Log.d(TAG, "本地計算 ETA: 距離=${distanceMeters}m, ETA=${etaMinutes}分")
+                        }
+
+                        // 更新狀態
+                        _uiState.value = _uiState.value.copy(
+                            driverToPickupDistanceMeters = distanceMeters,
+                            driverToPickupEtaMinutes = etaMinutes
+                        )
+
+                        // 檢查是否需要廣播
+                        checkAndAnnounceETA(distanceMeters, etaMinutes)
+                    }
+                }
+            }
+        }
+
+        // 監聽語音對講訊息
+        viewModelScope.launch {
+            webSocketManager.voiceChatMessage.collect { message ->
+                message?.let {
+                    android.util.Log.d(TAG, "收到語音對講訊息: ${it.senderName}說「${it.messageText}」")
+
+                    // 交給 VoiceChatManager 處理（播報 + 添加到記錄）
+                    voiceChatManager.receiveMessage(it)
+
+                    // 如果對講面板未開啟，增加未讀計數
+                    if (!_showVoiceChatPanel.value) {
+                        _voiceChatUnreadCount.value = _voiceChatUnreadCount.value + 1
+                    }
+
+                    // 清除 WebSocket 的訊息狀態
+                    webSocketManager.clearVoiceChatMessage()
                 }
             }
         }
@@ -435,6 +526,8 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
             android.util.Log.d("PassengerViewModel", "📡 準備發送API請求...")
 
             try {
+                // 傳遞 Directions API 計算的道路距離和車資給後端
+                // 確保司機端和乘客端顯示一致的車資
                 val result = passengerRepository.requestRide(
                     passengerId = passengerId,
                     passengerName = passengerName,
@@ -445,7 +538,9 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
                     destLat = state.destinationLocation?.latitude,
                     destLng = state.destinationLocation?.longitude,
                     destAddress = state.destinationAddress.takeIf { it.isNotEmpty() },
-                    paymentType = "CASH"
+                    paymentType = "CASH",
+                    tripDistanceMeters = state.routeInfo?.distanceMeters,
+                    estimatedFare = state.fareEstimate?.totalFare
                 )
 
                 result.onSuccess { rideResult ->
@@ -500,11 +595,30 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
      * 取消訂單
      */
     fun cancelOrder(passengerId: String) {
-        viewModelScope.launch {
-            val state = _uiState.value
-            val orderId = state.currentOrder?.orderId ?: return@launch
+        android.util.Log.d("PassengerViewModel", "========== 取消訂單 ==========")
+        android.util.Log.d("PassengerViewModel", "乘客ID: $passengerId")
 
-            _uiState.value = state.copy(isLoading = true)
+        viewModelScope.launch {
+            val currentState = _uiState.value
+            val orderId = currentState.currentOrder?.orderId
+
+            android.util.Log.d("PassengerViewModel", "訂單ID: $orderId")
+            android.util.Log.d("PassengerViewModel", "當前訂單狀態: ${currentState.orderStatus}")
+
+            if (orderId.isNullOrEmpty()) {
+                android.util.Log.e("PassengerViewModel", "❌ 取消失敗：沒有訂單ID (orderId=$orderId)")
+                _uiState.value = currentState.copy(error = "沒有可取消的訂單")
+                return@launch
+            }
+
+            // 防止重複點擊
+            if (currentState.isLoading) {
+                android.util.Log.w("PassengerViewModel", "⚠️ 已在處理中，忽略重複點擊")
+                return@launch
+            }
+
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            android.util.Log.d("PassengerViewModel", "📡 發送取消訂單請求...")
 
             try {
                 val result = passengerRepository.cancelOrder(
@@ -514,7 +628,9 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
                 )
 
                 result.onSuccess { message ->
-                    _uiState.value = state.copy(
+                    android.util.Log.d("PassengerViewModel", "✅ 取消訂單成功: $message")
+                    // 使用當前狀態 copy，避免覆蓋其他狀態變更
+                    _uiState.value = _uiState.value.copy(
                         currentOrder = null,
                         orderStatus = OrderStatus.CANCELLED,
                         isLoading = false,
@@ -526,16 +642,58 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
                         fareEstimate = null
                     )
                 }.onFailure { error ->
-                    _uiState.value = state.copy(
-                        isLoading = false,
-                        error = error.message ?: "取消失敗"
-                    )
+                    android.util.Log.e("PassengerViewModel", "❌ 取消訂單失敗: ${error.message}")
+
+                    // 檢查是否是「訂單已取消」的錯誤（後端狀態已經是 CANCELLED）
+                    // 這種情況下應該清除前端訂單狀態，避免 UI 卡住
+                    val errorMsg = error.message ?: "取消失敗"
+                    val isAlreadyCancelled = errorMsg.contains("CANCELLED") ||
+                                             errorMsg.contains("無法取消") ||
+                                             errorMsg.contains("不存在")
+
+                    if (isAlreadyCancelled) {
+                        android.util.Log.w("PassengerViewModel", "訂單已被取消或不存在，清除前端訂單狀態")
+                        _uiState.value = _uiState.value.copy(
+                            currentOrder = null,
+                            orderStatus = OrderStatus.CANCELLED,
+                            isLoading = false,
+                            pickupLocation = null,
+                            destinationLocation = null,
+                            pickupAddress = "",
+                            destinationAddress = "",
+                            routeInfo = null,
+                            fareEstimate = null,
+                            error = null  // 不顯示錯誤，因為實際上已取消
+                        )
+                    } else {
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            error = errorMsg
+                        )
+                    }
                 }
             } catch (e: Exception) {
-                _uiState.value = state.copy(
-                    isLoading = false,
-                    error = e.message ?: "取消失敗"
-                )
+                android.util.Log.e("PassengerViewModel", "❌ 取消訂單異常: ${e.message}", e)
+
+                // 網路異常時也檢查是否是訂單已取消的情況
+                val errorMsg = e.message ?: "取消失敗"
+                val isAlreadyCancelled = errorMsg.contains("CANCELLED") ||
+                                         errorMsg.contains("無法取消") ||
+                                         errorMsg.contains("不存在")
+
+                if (isAlreadyCancelled) {
+                    _uiState.value = _uiState.value.copy(
+                        currentOrder = null,
+                        orderStatus = OrderStatus.CANCELLED,
+                        isLoading = false,
+                        error = null
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = errorMsg
+                    )
+                }
             }
         }
     }
@@ -568,10 +726,89 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
 
         android.util.Log.d("PassengerViewModel", "映射後的訂單狀態: $orderStatus")
 
+        // 檢查是否是新接單（觸發初始 ETA 廣播）
+        val previousStatus = _uiState.value.orderStatus
+        val isNewlyAccepted = previousStatus != OrderStatus.ACCEPTED && orderStatus == OrderStatus.ACCEPTED
+
         _uiState.value = _uiState.value.copy(
             currentOrder = order,
             orderStatus = orderStatus
         )
+
+        // 檢查是否是新到達（觸發到達通知）
+        val isNewlyArrived = previousStatus != OrderStatus.ARRIVED && orderStatus == OrderStatus.ARRIVED
+
+        // 處理 ETA 廣播邏輯
+        when (orderStatus) {
+            OrderStatus.ACCEPTED -> {
+                if (isNewlyAccepted) {
+                    // 重置 ETA 追蹤
+                    resetETATracking()
+                    // 重置到達通知追蹤（新訂單開始）
+                    PassengerNotificationHelper.resetArrivalTracking()
+
+                    val driverName = order.driverName ?: "司機"
+
+                    // 使用訂單中的 ETA 資訊（來自後端計算）
+                    val etaMinutes = order.etaToPickup ?: order.getGoogleEtaMinutes()
+                    val distanceKm = order.distanceToPickup
+
+                    if (etaMinutes != null || distanceKm != null) {
+                        // 有後端提供的 ETA，直接使用
+                        val distanceMeters = ((distanceKm ?: 2.0) * 1000).toFloat()
+                        val eta = etaMinutes ?: (distanceMeters / 500).toInt().coerceAtLeast(1)
+
+                        _uiState.value = _uiState.value.copy(
+                            initialDriverDistance = distanceMeters,
+                            driverToPickupDistanceMeters = distanceMeters,
+                            driverToPickupEtaMinutes = eta,
+                            etaAnnouncedInitial = true
+                        )
+
+                        // 廣播初始 ETA
+                        val message = if (eta <= 2) {
+                            "${driverName}已接單，很快就到！"
+                        } else {
+                            "${driverName}已接單，預計 ${eta} 分鐘後到達"
+                        }
+                        announceDriverETA(message)
+                        android.util.Log.d(TAG, "📢 ETA 廣播（初始）: $message")
+                    } else {
+                        // 沒有 ETA 資訊，嘗試從附近司機列表計算
+                        val driverLocation = _uiState.value.nearbyDrivers
+                            .find { it.driverId == order.driverId }
+                            ?.location
+                        val pickupLocation = _uiState.value.pickupLocation
+
+                        setInitialDriverDistanceAndAnnounce(driverLocation, pickupLocation, driverName)
+                    }
+                }
+            }
+            OrderStatus.ARRIVED -> {
+                if (isNewlyArrived) {
+                    // 司機已到達上車點，發送通知
+                    val driverName = order.driverName ?: "司機"
+
+                    // 顯示系統通知（即使 App 在背景）
+                    PassengerNotificationHelper.showDriverArrivedNotification(
+                        context = getApplication(),
+                        driverName = driverName,
+                        orderId = order.orderId
+                    )
+
+                    // 同時語音播報
+                    val message = "${driverName}已到達上車點，請準備上車"
+                    announceDriverETA(message)
+
+                    android.util.Log.d(TAG, "📢 司機到達通知已發送: $driverName")
+                }
+            }
+            OrderStatus.COMPLETED, OrderStatus.CANCELLED -> {
+                // 訂單結束，重置 ETA 追蹤
+                resetETATracking()
+            }
+            else -> { /* 其他狀態不處理 */ }
+        }
 
         android.util.Log.d("PassengerViewModel", "✅ UI 狀態已更新")
     }
@@ -714,12 +951,38 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
         hybridLocationService.stopLocationUpdates()
     }
 
-    // ==================== 對話泡泡相關 ====================
+    // ==================== 語音播報相關 ====================
+
+    // 追蹤是否已播放過歡迎語
+    private var hasPlayedWelcome = false
 
     /**
-     * 讓小橘說話並顯示對話泡泡
+     * 播放歡迎語音（只在首次進入時播放）
+     */
+    fun playWelcomeGreeting() {
+        if (hasPlayedWelcome) {
+            android.util.Log.d(TAG, "歡迎語已播放過，跳過")
+            return
+        }
+        hasPlayedWelcome = true
+
+        // 延遲一點播放，等 UI 完全載入
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(500)
+            speakWithBubbleAndCallback(
+                message = "大豐你好，哪裡搭車呢？",
+                onComplete = {
+                    android.util.Log.d(TAG, "歡迎語播放完成，開始錄音")
+                    startVoiceRecording()
+                }
+            )
+        }
+    }
+
+    /**
+     * 播放語音並顯示文字
      * @param message 要說的話
-     * @param showBubble 是否顯示對話泡泡（預設顯示）
+     * @param showBubble 是否顯示文字（預設顯示）
      */
     fun speakWithBubble(message: String, showBubble: Boolean = true) {
         if (showBubble) {
@@ -745,7 +1008,7 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * 讓小橘說話並顯示對話泡泡，播放完成後執行回調
+     * 播放語音並顯示文字，播放完成後執行回調
      */
     fun speakWithBubbleAndCallback(
         message: String,
@@ -787,9 +1050,90 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
     /**
      * 連接 WebSocket（乘客端）
      */
-    fun connectWebSocket(passengerId: String) {
+    fun connectWebSocket(
+        passengerId: String,
+        onRestoreActiveOrder: ((Boolean?) -> Unit)? = null
+    ) {
         viewModelScope.launch {
             webSocketManager.connectAsPassenger(passengerId)
+
+            // 連接成功後，獲取當前進行中的訂單（恢復訂單狀態）
+            val hasActiveOrder = fetchActiveOrder(passengerId)
+            onRestoreActiveOrder?.invoke(hasActiveOrder)
+        }
+    }
+
+    /**
+     * 獲取當前進行中的訂單（用於 APP 重開時恢復訂單狀態）
+     */
+    private suspend fun fetchActiveOrder(passengerId: String): Boolean? {
+        android.util.Log.d(TAG, "========== 獲取活動訂單 ==========")
+        android.util.Log.d(TAG, "乘客ID: $passengerId")
+
+        return try {
+            // 嘗試獲取各種進行中狀態的訂單
+            val activeStatuses = listOf("WAITING", "ACCEPTED", "ARRIVED", "ON_TRIP", "SETTLING")
+
+            for (status in activeStatuses) {
+                val response = RetrofitClient.passengerApiService.getOrderHistory(
+                    passengerId = passengerId,
+                    status = status
+                )
+
+                if (response.isSuccessful) {
+                    val orderHistory = response.body()
+                    if (orderHistory?.success == true && orderHistory.orders.isNotEmpty()) {
+                        val orderDto = orderHistory.orders.first()
+                        android.util.Log.d(TAG, "✅ 找到活動訂單: ${orderDto.orderId}, 狀態: ${orderDto.status}")
+
+                        // 轉換 OrderDto 到 UI 狀態
+                        val orderStatus = when (orderDto.status) {
+                            "WAITING" -> OrderStatus.WAITING
+                            "ACCEPTED" -> OrderStatus.ACCEPTED
+                            "ARRIVED" -> OrderStatus.ARRIVED
+                            "ON_TRIP" -> OrderStatus.ON_TRIP
+                            "SETTLING" -> OrderStatus.SETTLING
+                            else -> OrderStatus.IDLE
+                        }
+
+                        // 轉換為 domain Order 模型
+                        val order = Order(
+                            orderId = orderDto.orderId,
+                            passengerId = orderDto.passengerId ?: passengerId,
+                            passengerName = orderDto.passengerName ?: "乘客",
+                            passengerPhone = orderDto.passengerPhone,
+                            driverId = orderDto.driverId,
+                            driverName = orderDto.driverName,
+                            driverPhone = orderDto.driverPhone,
+                            pickup = com.hualien.taxidriver.domain.model.Location(
+                                latitude = orderDto.pickup.lat,
+                                longitude = orderDto.pickup.lng,
+                                address = orderDto.pickup.address
+                            ),
+                            destination = orderDto.destination?.let { dest ->
+                                com.hualien.taxidriver.domain.model.Location(
+                                    latitude = dest.lat,
+                                    longitude = dest.lng,
+                                    address = dest.address
+                                )
+                            },
+                            statusString = orderDto.status
+                        )
+
+                        _uiState.value = _uiState.value.copy(
+                            currentOrder = order,
+                            orderStatus = orderStatus
+                        )
+                        return true
+                    }
+                }
+            }
+
+            android.util.Log.d(TAG, "📭 無活動訂單")
+            false
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "❌ 獲取活動訂單失敗: ${e.message}", e)
+            null
         }
     }
 
@@ -1017,6 +1361,13 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
                             voiceError = null
                         )
 
+                        // 火車站特殊流程：直接用轉錄文字處理火車時間
+                        if (_uiState.value.voiceAutoflowState == VoiceAutoflowState.ASKING_TRAIN_TIME) {
+                            android.util.Log.d(TAG, "火車時間回覆: ${result.command.transcription}")
+                            handleTrainTimeResponse(result.command.transcription)
+                            return@launch
+                        }
+
                         // 處理語音指令
                         val commandResult = voiceCommandHandler.handleCommand(result.command)
                         handleVoiceCommandResult(commandResult)
@@ -1220,27 +1571,341 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * 語音自動流程：設置待確認的目的地
+     * 語音自動流程：設置待確認的目的地（含車資計算）
      */
     private fun setPendingDestination(details: PlaceDetails) {
         android.util.Log.d(TAG, "設置待確認目的地: ${details.name}")
+
+        // 檢測是否為火車站
+        val isTrainStation = details.name.contains("火車站") ||
+                             details.name.contains("車站") ||
+                             details.address.contains("火車站")
+
+        if (isTrainStation) {
+            // 火車站特殊流程：先詢問火車時間
+            android.util.Log.d(TAG, "偵測到火車站目的地，詢問火車時間")
+            _uiState.value = _uiState.value.copy(
+                pendingDestinationDetails = details,
+                voiceAutoflowState = VoiceAutoflowState.ASKING_TRAIN_TIME
+            )
+            askTrainTime()
+            return
+        }
 
         _uiState.value = _uiState.value.copy(
             pendingDestinationDetails = details,
             voiceAutoflowState = VoiceAutoflowState.CONFIRMING_DESTINATION
         )
 
-        // 語音詢問確認，播報完成後自動開始錄音
+        val currentLocation = _uiState.value.currentLocation
+        val destLatLng = details.latLng
+
+        // 如果有當前位置和目的地座標，計算路線和車資
+        if (currentLocation != null && destLatLng != null) {
+            viewModelScope.launch {
+                try {
+                    val result = directionsService.getDirections(currentLocation, destLatLng)
+                    result.onSuccess { directions ->
+                        // 計算車資
+                        val fare = FareCalculator.calculateFare(directions.distanceMeters)
+                        val distanceKm = String.format("%.1f", directions.distanceMeters / 1000.0)
+
+                        _uiState.value = _uiState.value.copy(
+                            routeInfo = directions,
+                            fareEstimate = fare
+                        )
+
+                        android.util.Log.d(TAG, "路線計算成功: ${directions.distanceText}, 車資: NT$ ${fare.totalFare}")
+
+                        // 語音詢問確認（含車資+派車時間），播報完成後自動開始錄音
+                        val fareMessage = if (fare.isNightTime) {
+                            "約 ${fare.totalFare} 元，含夜間加成"
+                        } else {
+                            "約 ${fare.totalFare} 元"
+                        }
+
+                        // 計算最近司機的預估到達時間
+                        val etaMessage = getEstimatedPickupTime()
+
+                        speakWithBubbleAndCallback(
+                            message = "去${details.name}，$fareMessage，$etaMessage，可以等嗎？",
+                            onComplete = {
+                                android.util.Log.d(TAG, "語音詢問完成，自動開始錄音監聽回應")
+                                if (_uiState.value.voiceAutoflowState == VoiceAutoflowState.CONFIRMING_DESTINATION) {
+                                    startVoiceRecording()
+                                }
+                            }
+                        )
+                    }.onFailure { error ->
+                        android.util.Log.w(TAG, "路線計算失敗，使用簡單確認: ${error.message}")
+                        // 路線計算失敗，仍然詢問確認但不含車資
+                        speakSimpleConfirmation(details)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "路線計算異常，使用簡單確認: ${e.message}")
+                    speakSimpleConfirmation(details)
+                }
+            }
+        } else {
+            // 沒有當前位置，使用簡單確認
+            android.util.Log.w(TAG, "無法計算車資（缺少位置資訊），使用簡單確認")
+            speakSimpleConfirmation(details)
+        }
+    }
+
+    /**
+     * 簡單確認目的地（不含車資）- 備援方案
+     */
+    private fun speakSimpleConfirmation(details: PlaceDetails) {
+        val etaMessage = getEstimatedPickupTime()
         speakWithBubbleAndCallback(
-            message = "您是要去「${details.name}」嗎？請說「對」確認，或說「不對」重選",
+            message = "去${details.name}，$etaMessage，可以等嗎？",
             onComplete = {
-                // 語音播報完成後，自動開始錄音監聽用戶回應
                 android.util.Log.d(TAG, "語音詢問完成，自動開始錄音監聽回應")
-                // 確保還在確認狀態才開始錄音
                 if (_uiState.value.voiceAutoflowState == VoiceAutoflowState.CONFIRMING_DESTINATION) {
                     startVoiceRecording()
                 }
             }
+        )
+    }
+
+    /**
+     * 估算最近司機的到達時間
+     */
+    private fun getEstimatedPickupTime(): String {
+        val currentLocation = _uiState.value.currentLocation ?: return "派車約 3 分鐘"
+        val nearbyDrivers = _uiState.value.nearbyDrivers
+
+        if (nearbyDrivers.isEmpty()) {
+            return "派車約 3 分鐘"
+        }
+
+        // 找最近的司機
+        val nearestDriver = nearbyDrivers.minByOrNull { driver ->
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(
+                currentLocation.latitude, currentLocation.longitude,
+                driver.location.latitude, driver.location.longitude,
+                results
+            )
+            results[0]
+        }
+
+        nearestDriver?.let { driver ->
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(
+                currentLocation.latitude, currentLocation.longitude,
+                driver.location.latitude, driver.location.longitude,
+                results
+            )
+            val distanceMeters = results[0]
+            // 假設平均車速 30 km/h = 500m/分鐘
+            val etaMinutes = (distanceMeters / 500).toInt().coerceAtLeast(1)
+            return "派車約 $etaMinutes 分鐘"
+        }
+
+        return "派車約 3 分鐘"
+    }
+
+    /**
+     * 火車站專用：詢問火車時間
+     */
+    private fun askTrainTime() {
+        speakWithBubbleAndCallback(
+            message = "趕火車是幾點的？",
+            onComplete = {
+                android.util.Log.d(TAG, "詢問火車時間完成，開始錄音")
+                if (_uiState.value.voiceAutoflowState == VoiceAutoflowState.ASKING_TRAIN_TIME) {
+                    startVoiceRecording()
+                }
+            }
+        )
+    }
+
+    /**
+     * 火車站專用：處理火車時間回覆
+     * @param trainTimeText 用戶說的火車時間（如 "十點半"、"下午三點"）
+     */
+    fun handleTrainTimeResponse(trainTimeText: String) {
+        android.util.Log.d(TAG, "處理火車時間回覆: $trainTimeText")
+
+        val details = _uiState.value.pendingDestinationDetails ?: run {
+            android.util.Log.w(TAG, "沒有待確認的目的地")
+            resetVoiceAutoflow()
+            return
+        }
+
+        // 解析火車時間，計算距離現在多少分鐘
+        val minutesUntilTrain = parseTrainTime(trainTimeText)
+        android.util.Log.d(TAG, "距離火車發車還有 $minutesUntilTrain 分鐘")
+
+        // 如果 30 分鐘內要到車站，檢查是否有車
+        if (minutesUntilTrain != null && minutesUntilTrain <= 30) {
+            val hasNearbyDriver = _uiState.value.nearbyDrivers.isNotEmpty()
+
+            if (!hasNearbyDriver) {
+                // 沒有司機，拒絕服務
+                android.util.Log.d(TAG, "30分鐘內趕火車但附近沒車，拒絕服務")
+                speakWithBubble("抱歉，目前附近沒有司機，改天再為您服務")
+                _uiState.value = _uiState.value.copy(
+                    voiceAutoflowState = VoiceAutoflowState.IDLE,
+                    pendingDestinationDetails = null
+                )
+                return
+            }
+
+            // 有司機，繼續正常流程但提醒時間緊迫
+            android.util.Log.d(TAG, "30分鐘內趕火車，附近有車，繼續流程")
+        }
+
+        // 繼續正常確認流程
+        _uiState.value = _uiState.value.copy(
+            voiceAutoflowState = VoiceAutoflowState.CONFIRMING_DESTINATION
+        )
+        proceedWithDestinationConfirmation(details)
+    }
+
+    /**
+     * 解析火車時間文字，返回距離現在的分鐘數
+     * @return 分鐘數，如果無法解析則返回 null
+     */
+    private fun parseTrainTime(timeText: String): Int? {
+        try {
+            val now = java.util.Calendar.getInstance()
+            val currentHour = now.get(java.util.Calendar.HOUR_OF_DAY)
+            val currentMinute = now.get(java.util.Calendar.MINUTE)
+
+            // 嘗試解析各種時間格式
+            var targetHour: Int? = null
+            var targetMinute: Int = 0
+
+            // 處理 "X點半"
+            val halfPattern = Regex("(\\d+|[一二三四五六七八九十]+)點半")
+            halfPattern.find(timeText)?.let { match ->
+                targetHour = parseChineseNumber(match.groupValues[1])
+                targetMinute = 30
+            }
+
+            // 處理 "X點" (不含半)
+            if (targetHour == null) {
+                val hourPattern = Regex("(\\d+|[一二三四五六七八九十]+)點")
+                hourPattern.find(timeText)?.let { match ->
+                    targetHour = parseChineseNumber(match.groupValues[1])
+                    targetMinute = 0
+                }
+            }
+
+            // 處理 "X:XX" 或 "X：XX"
+            if (targetHour == null) {
+                val colonPattern = Regex("(\\d+)[：:](\\d+)")
+                colonPattern.find(timeText)?.let { match ->
+                    targetHour = match.groupValues[1].toIntOrNull()
+                    targetMinute = match.groupValues[2].toIntOrNull() ?: 0
+                }
+            }
+
+            // 處理下午/晚上
+            if (targetHour != null && targetHour!! < 12) {
+                if (timeText.contains("下午") || timeText.contains("晚上")) {
+                    targetHour = targetHour!! + 12
+                } else if (!timeText.contains("上午") && !timeText.contains("早上")) {
+                    // 沒有明確指定，根據當前時間推斷
+                    if (currentHour >= 12 && targetHour!! < currentHour - 12) {
+                        targetHour = targetHour!! + 12
+                    }
+                }
+            }
+
+            if (targetHour == null) {
+                android.util.Log.w(TAG, "無法解析時間: $timeText")
+                return null
+            }
+
+            // 計算距離現在的分鐘數
+            var minutesUntil = (targetHour!! - currentHour) * 60 + (targetMinute - currentMinute)
+
+            // 如果是負數，可能是明天的時間（但趕火車通常不會是明天）
+            if (minutesUntil < 0) {
+                minutesUntil += 24 * 60
+            }
+
+            return minutesUntil
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "解析時間失敗: ${e.message}")
+            return null
+        }
+    }
+
+    /**
+     * 解析中文數字
+     */
+    private fun parseChineseNumber(text: String): Int? {
+        // 先嘗試直接解析阿拉伯數字
+        text.toIntOrNull()?.let { return it }
+
+        // 中文數字對照
+        val chineseMap = mapOf(
+            "一" to 1, "二" to 2, "三" to 3, "四" to 4, "五" to 5,
+            "六" to 6, "七" to 7, "八" to 8, "九" to 9, "十" to 10,
+            "十一" to 11, "十二" to 12
+        )
+
+        return chineseMap[text]
+    }
+
+    /**
+     * 繼續目的地確認流程（火車站詢問時間後使用）
+     */
+    private fun proceedWithDestinationConfirmation(details: PlaceDetails) {
+        val currentLocation = _uiState.value.currentLocation
+        val destLatLng = details.latLng
+
+        if (currentLocation != null && destLatLng != null) {
+            viewModelScope.launch {
+                try {
+                    val result = directionsService.getDirections(currentLocation, destLatLng)
+                    result.onSuccess { directions ->
+                        val fare = FareCalculator.calculateFare(directions.distanceMeters)
+
+                        _uiState.value = _uiState.value.copy(
+                            routeInfo = directions,
+                            fareEstimate = fare
+                        )
+
+                        val fareMessage = if (fare.isNightTime) {
+                            "約 ${fare.totalFare} 元，含夜間加成"
+                        } else {
+                            "約 ${fare.totalFare} 元"
+                        }
+                        val etaMessage = getEstimatedPickupTime()
+
+                        speakWithBubbleAndCallback(
+                            message = "去${details.name}，$fareMessage，$etaMessage，可以等嗎？",
+                            onComplete = {
+                                if (_uiState.value.voiceAutoflowState == VoiceAutoflowState.CONFIRMING_DESTINATION) {
+                                    startVoiceRecording()
+                                }
+                            }
+                        )
+                    }.onFailure {
+                        speakSimpleConfirmation(details)
+                    }
+                } catch (e: Exception) {
+                    speakSimpleConfirmation(details)
+                }
+            }
+        } else {
+            speakSimpleConfirmation(details)
+        }
+    }
+
+    /**
+     * 重置語音自動流程
+     */
+    private fun resetVoiceAutoflow() {
+        _uiState.value = _uiState.value.copy(
+            voiceAutoflowState = VoiceAutoflowState.IDLE,
+            pendingDestinationDetails = null
         )
     }
 
@@ -1379,11 +2044,194 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
         )
     }
 
+    // ==================== 語音對講功能 ====================
+
+    /**
+     * 開始語音對講錄音（按住按鈕時調用）
+     */
+    fun startVoiceChatRecording() {
+        val currentOrder = _uiState.value.currentOrder
+        if (currentOrder == null) {
+            android.util.Log.w(TAG, "無法開始對講：沒有進行中的訂單")
+            return
+        }
+
+        // 設置 VoiceChatManager 的用戶資訊
+        voiceChatManager.setCurrentUser(
+            orderId = currentOrder.orderId,
+            userId = currentPassengerId,
+            userName = currentOrder.passengerName ?: "乘客",
+            userType = VoiceChatMessage.SENDER_TYPE_PASSENGER
+        )
+
+        voiceChatManager.startRecording()
+    }
+
+    /**
+     * 停止語音對講錄音並發送（放開按鈕時調用）
+     */
+    fun stopVoiceChatRecording() {
+        voiceChatManager.stopRecordingAndSend()
+    }
+
+    /**
+     * 取消語音對講錄音（不發送）
+     */
+    fun cancelVoiceChatRecording() {
+        voiceChatManager.cancelRecording()
+    }
+
+    /**
+     * 顯示語音對講面板
+     */
+    fun showVoiceChatPanel() {
+        _showVoiceChatPanel.value = true
+        _voiceChatUnreadCount.value = 0  // 清除未讀計數
+    }
+
+    /**
+     * 隱藏語音對講面板
+     */
+    fun hideVoiceChatPanel() {
+        _showVoiceChatPanel.value = false
+    }
+
+    /**
+     * 判斷是否可以使用語音對講
+     * 只有在訂單進行中（司機已接單 ~ 行程中）才能使用
+     */
+    fun canUseVoiceChat(): Boolean {
+        val status = _uiState.value.orderStatus
+        return status in listOf(
+            OrderStatus.ACCEPTED,
+            OrderStatus.DRIVER_ARRIVING,
+            OrderStatus.ARRIVED,
+            OrderStatus.ON_TRIP
+        )
+    }
+
+    /**
+     * 清除語音對講記錄（訂單結束時調用）
+     */
+    fun clearVoiceChatHistory() {
+        voiceChatManager.clearHistory()
+        _voiceChatUnreadCount.value = 0
+    }
+
+    // ==================== 司機 ETA 廣播功能 ====================
+
+    /**
+     * 計算兩點之間的距離（公尺）- Haversine 公式
+     */
+    private fun calculateDistanceMeters(from: LatLng, to: LatLng): Float {
+        val earthRadius = 6371000.0 // 地球半徑（公尺）
+
+        val lat1 = Math.toRadians(from.latitude)
+        val lat2 = Math.toRadians(to.latitude)
+        val deltaLat = Math.toRadians(to.latitude - from.latitude)
+        val deltaLng = Math.toRadians(to.longitude - from.longitude)
+
+        val a = kotlin.math.sin(deltaLat / 2) * kotlin.math.sin(deltaLat / 2) +
+                kotlin.math.cos(lat1) * kotlin.math.cos(lat2) *
+                kotlin.math.sin(deltaLng / 2) * kotlin.math.sin(deltaLng / 2)
+        val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+
+        return (earthRadius * c).toFloat()
+    }
+
+    /**
+     * 檢查並廣播 ETA
+     * 三個廣播時機：
+     * 1. 司機剛接單時（初始 ETA）
+     * 2. 距離減少到一半時
+     * 3. 剩餘 1 公里時
+     */
+    private fun checkAndAnnounceETA(distanceMeters: Float, etaMinutes: Int) {
+        val state = _uiState.value
+        val initialDistance = state.initialDriverDistance ?: return
+        val driverName = state.currentOrder?.driverName ?: "司機"
+
+        // 1. 初始廣播（只在設置初始距離時觸發，由 updateOrderStatus 處理）
+        // 這裡不處理，因為初始廣播在訂單狀態變為 ACCEPTED 時觸發
+
+        // 2. 一半距離廣播
+        if (!state.etaAnnouncedHalfway && distanceMeters <= initialDistance / 2) {
+            _uiState.value = _uiState.value.copy(etaAnnouncedHalfway = true)
+            val message = if (etaMinutes <= 1) {
+                "${driverName}馬上就到了，請準備上車"
+            } else {
+                "${driverName}還有大約 ${etaMinutes} 分鐘到達"
+            }
+            announceDriverETA(message)
+            android.util.Log.d(TAG, "📢 ETA 廣播（一半距離）: $message")
+        }
+
+        // 3. 剩餘 1 公里廣播
+        if (!state.etaAnnouncedOneKm && distanceMeters <= 1000) {
+            _uiState.value = _uiState.value.copy(etaAnnouncedOneKm = true)
+            val message = if (etaMinutes <= 1) {
+                "${driverName}快到了，還有不到一公里"
+            } else {
+                "${driverName}還有約 ${etaMinutes} 分鐘，請到上車點等候"
+            }
+            announceDriverETA(message)
+            android.util.Log.d(TAG, "📢 ETA 廣播（剩餘1公里）: $message")
+        }
+    }
+
+    /**
+     * 廣播司機 ETA（使用 TTS 語音）
+     */
+    private fun announceDriverETA(message: String) {
+        speakWithBubble(message)
+    }
+
+    /**
+     * 重置 ETA 追蹤（新訂單開始時調用）
+     */
+    private fun resetETATracking() {
+        _uiState.value = _uiState.value.copy(
+            driverToPickupDistanceMeters = null,
+            driverToPickupEtaMinutes = null,
+            initialDriverDistance = null,
+            etaAnnouncedInitial = false,
+            etaAnnouncedHalfway = false,
+            etaAnnouncedOneKm = false
+        )
+    }
+
+    /**
+     * 設置初始司機距離並廣播初始 ETA
+     */
+    private fun setInitialDriverDistanceAndAnnounce(driverLocation: LatLng?, pickupLocation: LatLng?, driverName: String) {
+        if (driverLocation == null || pickupLocation == null) return
+
+        val distanceMeters = calculateDistanceMeters(driverLocation, pickupLocation)
+        val etaMinutes = (distanceMeters / 500).toInt().coerceAtLeast(1)
+
+        _uiState.value = _uiState.value.copy(
+            initialDriverDistance = distanceMeters,
+            driverToPickupDistanceMeters = distanceMeters,
+            driverToPickupEtaMinutes = etaMinutes,
+            etaAnnouncedInitial = true
+        )
+
+        // 廣播初始 ETA
+        val message = if (etaMinutes <= 2) {
+            "${driverName}已接單，很快就到！"
+        } else {
+            "${driverName}已接單，預計 ${etaMinutes} 分鐘後到達"
+        }
+        announceDriverETA(message)
+        android.util.Log.d(TAG, "📢 ETA 廣播（初始）: $message, 距離: ${distanceMeters.toInt()}m")
+    }
+
     override fun onCleared() {
         super.onCleared()
         hybridLocationService.stopLocationUpdates()
         voiceRecorderService.release()
         voiceAssistant.release()
+        voiceChatManager.release()
         viewModelScope.launch {
             webSocketManager.disconnect()
         }

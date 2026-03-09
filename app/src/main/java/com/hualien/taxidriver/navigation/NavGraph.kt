@@ -13,6 +13,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.hualien.taxidriver.ui.screens.*
 import com.hualien.taxidriver.utils.DataStoreManager
+import com.hualien.taxidriver.utils.RoleManager
 
 /**
  * App主導航結構
@@ -23,6 +24,7 @@ fun MainNavigation(
     driverId: String,
     driverName: String,
     dataStoreManager: DataStoreManager,
+    roleManager: RoleManager,
     onLogout: () -> Unit
 ) {
     val navController = rememberNavController()
@@ -85,7 +87,29 @@ fun MainNavigation(
                     driverId = driverId,
                     driverName = driverName,
                     dataStoreManager = dataStoreManager,
-                    onLogout = onLogout
+                    roleManager = roleManager,
+                    onLogout = onLogout,
+                    onNavigateToAutoAccept = {
+                        navController.navigate(Screen.AutoAcceptSettings.route)
+                    },
+                    onNavigateToAccessibility = {
+                        navController.navigate(Screen.AccessibilitySettings.route)
+                    }
+                )
+            }
+
+            // 自動接單設定
+            composable(Screen.AutoAcceptSettings.route) {
+                AutoAcceptSettingsScreen(
+                    driverId = driverId,
+                    onBackClick = { navController.popBackStack() }
+                )
+            }
+
+            // 無障礙設定
+            composable(Screen.AccessibilitySettings.route) {
+                AccessibilitySettingsScreen(
+                    onBackClick = { navController.popBackStack() }
                 )
             }
         }

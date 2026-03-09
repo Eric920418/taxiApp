@@ -4,7 +4,6 @@ import com.hualien.taxidriver.data.remote.dto.*
 import com.hualien.taxidriver.data.remote.dto.EarningsResponse
 import com.hualien.taxidriver.domain.model.DailyEarning
 import com.hualien.taxidriver.domain.model.Driver
-import com.hualien.taxidriver.domain.model.Order
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -86,11 +85,12 @@ interface ApiService {
 
     /**
      * 取得單一訂單
+     * 返回 OrderDto 來處理 ISO 8601 日期格式
      */
     @GET("orders/{orderId}")
     suspend fun getOrder(
         @Path("orderId") orderId: String
-    ): Response<Order>
+    ): Response<OrderDto>
 
     /**
      * 接受訂單
@@ -113,21 +113,23 @@ interface ApiService {
 
     /**
      * 更新訂單狀態
+     * 返回 OrderDto 來處理 ISO 8601 日期格式
      */
     @PATCH("orders/{orderId}/status")
     suspend fun updateOrderStatus(
         @Path("orderId") orderId: String,
         @Body request: UpdateOrderStatusRequest
-    ): Response<Order>
+    ): Response<OrderDto>
 
     /**
      * 上傳車資結算
+     * 返回 OrderDto 來處理 ISO 8601 日期格式
      */
     @POST("orders/{orderId}/fare")
     suspend fun submitFare(
         @Path("orderId") orderId: String,
         @Body request: SubmitFareRequest
-    ): Response<Order>
+    ): Response<OrderDto>
 
     // ==================== 定位相關 ====================
 
@@ -208,4 +210,40 @@ interface ApiService {
      */
     @GET("whisper/health")
     suspend fun checkVoiceHealth(): Response<Map<String, Any>>
+
+    // ==================== 自動接單相關 ====================
+
+    /**
+     * 取得司機自動接單設定
+     */
+    @GET("drivers/{driverId}/auto-accept-settings")
+    suspend fun getAutoAcceptSettings(
+        @Path("driverId") driverId: String
+    ): Response<AutoAcceptSettingsResponse>
+
+    /**
+     * 更新司機自動接單設定
+     */
+    @PUT("drivers/{driverId}/auto-accept-settings")
+    suspend fun updateAutoAcceptSettings(
+        @Path("driverId") driverId: String,
+        @Body request: UpdateAutoAcceptSettingsRequest
+    ): Response<AutoAcceptSettingsResponse>
+
+    /**
+     * 取得司機自動接單統計
+     */
+    @GET("drivers/{driverId}/auto-accept-stats")
+    suspend fun getAutoAcceptStats(
+        @Path("driverId") driverId: String
+    ): Response<AutoAcceptStatsResponse>
+
+    // ==================== 配置相關 ====================
+
+    /**
+     * 取得車資費率配置
+     * 用於動態調整費率
+     */
+    @GET("config/fare")
+    suspend fun getFareConfig(): Response<FareConfigResponse>
 }

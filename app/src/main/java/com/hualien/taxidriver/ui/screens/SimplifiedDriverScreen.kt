@@ -2,7 +2,9 @@ package com.hualien.taxidriver.ui.screens
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.location.Location
+import android.net.Uri
 import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -35,15 +37,16 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.manager.NextAction
 import com.hualien.taxidriver.manager.SmartOrderManager
 import com.hualien.taxidriver.manager.SmartOrderState
-import com.hualien.taxidriver.data.remote.dto.VoiceAction
 import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.domain.model.OrderStatus
-import com.hualien.taxidriver.service.VoiceRecorderService
+import com.hualien.taxidriver.ui.components.OrderTagRowLarge
 import com.hualien.taxidriver.ui.components.FareDialog
+import com.hualien.taxidriver.ui.components.MiniVoiceChatButton
 import com.hualien.taxidriver.ui.components.RatingDialog
-import com.hualien.taxidriver.ui.components.VoiceCommandButton
+import com.hualien.taxidriver.ui.components.VoiceChatPanel
 import com.hualien.taxidriver.utils.VoiceAssistant
 import com.hualien.taxidriver.utils.VoiceCommandHandler
+import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -73,11 +76,6 @@ fun SimplifiedDriverScreen(
     // 語音助理（TTS 播報）
     val voiceAssistant = remember { VoiceAssistant(context) }
 
-    // 語音錄製服務
-    val voiceRecorderService = remember { VoiceRecorderService(context) }
-    val recordingState by voiceRecorderService.state.collectAsState()
-    val amplitude by voiceRecorderService.amplitude.collectAsState()
-
     // 語音指令處理器
     val voiceCommandHandler = remember { VoiceCommandHandler(context, voiceAssistant) }
 
@@ -85,6 +83,14 @@ fun SimplifiedDriverScreen(
     val uiState by viewModel.uiState.collectAsState()
     var showFareDialog by remember { mutableStateOf(false) }
     var isProcessing by remember { mutableStateOf(false) }
+
+    // 語音對講狀態
+    val voiceChatHistory by viewModel.voiceChatHistory.collectAsState()
+    val voiceChatState by viewModel.voiceChatState.collectAsState()
+    val isVoiceChatRecording by viewModel.voiceChatRecording.collectAsState()
+    val voiceChatAmplitude by viewModel.voiceChatAmplitude.collectAsState()
+    val showVoiceChatPanel by viewModel.showVoiceChatPanel.collectAsState()
+    val voiceChatUnreadCount by viewModel.voiceChatUnreadCount.collectAsState()
 
     // 位置服務
     val fusedLocationClient = remember {
@@ -116,21 +122,41 @@ fun SimplifiedDriverScreen(
         viewModel.connectWebSocket(driverId)
     }
 
-    // 清理資源
-    DisposableEffect(Unit) {
-        onDispose {
-            viewModel.disconnectWebSocket()
-            voiceRecorderService.release()
+    // 初始化 ViewModel 語音服務（用於語音接單）
+    LaunchedEffect(driverId, driverName) {
+        viewModel.initVoiceServices(context, driverId, driverName)
+        viewModel.initVoiceChat(context)  // 初始化語音對講
+    }
+
+    // 當訂單被接受時，設置語音對講用戶資訊
+    LaunchedEffect(uiState.currentOrder?.orderId, uiState.currentOrder?.status) {
+        val order = uiState.currentOrder
+        if (order != null && order.status in listOf(OrderStatus.ACCEPTED, OrderStatus.ARRIVED, OrderStatus.ON_TRIP)) {
+            viewModel.setupVoiceChatUser(order.orderId, driverId, driverName)
+        }
+    }
+
+    // WebSocket 生命週期由 ViewModel.onCleared() 管理，不在 UI 層斷開
+    // 避免畫面切換/重組時誤觸發斷線
+
+    // 顯示錯誤提示
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let { error ->
+            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+            voiceAssistant.speak("操作失敗，${error}")
         }
     }
 
     // 設置語音指令處理器回調
+    // 注意：語音指令不需要立即更新 SmartOrderManager 狀態
+    // 因為 ViewModel 的 API 調用成功後會更新 uiState.currentOrder
+    // 然後 LaunchedEffect(uiState.currentOrder) 會自動同步到 SmartOrderManager
     LaunchedEffect(Unit) {
         voiceCommandHandler.setCallback(object : VoiceCommandHandler.CommandCallback {
             override fun onAcceptOrder(orderId: String?) {
                 (orderState as? SmartOrderState.WaitingForAccept)?.let { state ->
                     viewModel.acceptOrder(state.order.orderId, driverId, driverName)
-                    smartOrderManager.executeNextAction()
+                    // 狀態由 ViewModel 更新後自動同步
                 }
             }
 
@@ -144,21 +170,21 @@ fun SimplifiedDriverScreen(
             override fun onMarkArrived(orderId: String?) {
                 (orderState as? SmartOrderState.NavigatingToPickup)?.let { state ->
                     viewModel.markArrived(state.order.orderId)
-                    smartOrderManager.executeNextAction()
+                    // 狀態由 ViewModel 更新後自動同步
                 }
             }
 
             override fun onStartTrip(orderId: String?) {
                 (orderState as? SmartOrderState.ArrivedAtPickup)?.let { state ->
                     viewModel.startTrip(state.order.orderId)
-                    smartOrderManager.executeNextAction()
+                    // 狀態由 ViewModel 更新後自動同步
                 }
             }
 
             override fun onEndTrip(orderId: String?) {
                 (orderState as? SmartOrderState.OnTrip)?.let { state ->
                     viewModel.endTrip(state.order.orderId)
-                    smartOrderManager.executeNextAction()
+                    // 狀態由 ViewModel 更新後自動同步
                 }
             }
 
@@ -198,7 +224,6 @@ fun SimplifiedDriverScreen(
     // 處理語音指令結果
     LaunchedEffect(uiState.lastVoiceCommand) {
         uiState.lastVoiceCommand?.let { command ->
-            voiceRecorderService.resetState()
             val result = voiceCommandHandler.handleCommand(command)
             viewModel.clearVoiceCommand()
         }
@@ -207,7 +232,6 @@ fun SimplifiedDriverScreen(
     // 處理語音錯誤
     LaunchedEffect(uiState.voiceError) {
         uiState.voiceError?.let { error ->
-            voiceRecorderService.resetState()
             voiceAssistant.speak(error)
             viewModel.clearVoiceError()
         }
@@ -232,10 +256,12 @@ fun SimplifiedDriverScreen(
         uiState.currentOrder?.let { order ->
             smartOrderManager.setOrder(order)
 
-            // 語音提示新訂單
+            // 語音提示新訂單（使用 ViewModel 的語音接單功能）
             when (order.status) {
                 com.hualien.taxidriver.domain.model.OrderStatus.OFFERED -> {
-                    voiceAssistant.speak("新訂單，前往${order.pickup.address}")
+                    // 使用 ViewModel 的 announceNewOrder 進行語音接單播報
+                    // 播報完會自動開始語音監聽
+                    viewModel.announceNewOrder(order)
                 }
                 else -> {}
             }
@@ -295,14 +321,17 @@ fun SimplifiedDriverScreen(
             // 中間：智能大按鈕
             SmartActionButton(
                 orderState = orderState,
-                isProcessing = isProcessing,
+                isProcessing = isProcessing || uiState.isLoading, // 結合兩種載入狀態
                 pulseScale = pulseScale,
                 onClick = {
+                    // 防止重複點擊
+                    if (isProcessing || uiState.isLoading) return@SmartActionButton
+
                     scope.launch {
                         isProcessing = true
 
-                        // 執行下一步操作
-                        val nextAction = smartOrderManager.executeNextAction()
+                        // 獲取下一步操作（不改變狀態）
+                        val nextAction = smartOrderManager.getNextAction()
                         handleNextAction(
                             nextAction = nextAction,
                             viewModel = viewModel,
@@ -311,7 +340,13 @@ fun SimplifiedDriverScreen(
                             onShowFareDialog = { showFareDialog = true }
                         )
 
-                        delay(1000)
+                        // 等待 API 完成或超時（最多 10 秒）
+                        var waitTime = 0
+                        while (uiState.isLoading && waitTime < 10000) {
+                            delay(100)
+                            waitTime += 100
+                        }
+
                         isProcessing = false
                     }
                 }
@@ -331,27 +366,118 @@ fun SimplifiedDriverScreen(
             AutoHintBanner(orderState = orderState)
         }
 
-        // 語音指令按鈕（右下角）
-        VoiceCommandButton(
-            recordingState = recordingState,
-            amplitude = amplitude,
-            onStartRecording = {
-                voiceRecorderService.startRecording { audioFile ->
-                    // 錄音完成，上傳到 server
-                    viewModel.transcribeAudio(audioFile, driverId)
-                }
-            },
-            onStopRecording = {
-                voiceRecorderService.stopRecording()
-            },
-            onCancelRecording = {
-                voiceRecorderService.cancelRecording()
-            },
+        // 語音監聽指示器（語音接單時顯示）
+        AnimatedVisibility(
+            visible = uiState.isVoiceListening,
+            enter = fadeIn() + slideInVertically { -it },
+            exit = fadeOut() + slideOutVertically { -it },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 100.dp)
+        ) {
+            VoiceListeningIndicator()
+        }
+
+        // 一鍵撥號浮動按鈕（接單後顯示）
+        val currentOrderState = orderState  // 捕獲委託屬性的值以支援 smart cast
+        val showCallButton = when (currentOrderState) {
+            is SmartOrderState.NavigatingToPickup,
+            is SmartOrderState.ArrivedAtPickup,
+            is SmartOrderState.OnTrip -> true
+            else -> false
+        }
+
+        val passengerPhone = when (currentOrderState) {
+            is SmartOrderState.NavigatingToPickup -> currentOrderState.order.passengerPhone
+            is SmartOrderState.ArrivedAtPickup -> currentOrderState.order.passengerPhone
+            is SmartOrderState.OnTrip -> currentOrderState.order.passengerPhone
+            else -> null
+        }
+
+        // 底部操作按鈕（語音對講 + 撥號）
+        AnimatedVisibility(
+            visible = showCallButton && passengerPhone != null,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(24.dp),
-            enabled = uiState.driverStatus != DriverAvailability.OFFLINE
-        )
+                .padding(24.dp)
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                // 語音對講按鈕（接單後顯示）
+                if (viewModel.canUseVoiceChat()) {
+                    FloatingActionButton(
+                        onClick = { viewModel.showVoiceChatPanel() },
+                        containerColor = if (voiceChatUnreadCount > 0)
+                            MaterialTheme.colorScheme.error
+                        else
+                            MaterialTheme.colorScheme.secondary,
+                        contentColor = Color.White,
+                        modifier = Modifier.size(72.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "語音對講",
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Text(
+                                text = if (voiceChatUnreadCount > 0) "新訊息" else "對講",
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
+                // 撥號按鈕
+                FloatingActionButton(
+                    onClick = {
+                        passengerPhone?.let { phone ->
+                            val intent = Intent(Intent.ACTION_DIAL).apply {
+                                data = Uri.parse("tel:$phone")
+                            }
+                            context.startActivity(intent)
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = Color.White,
+                    modifier = Modifier.size(72.dp) // 大按鈕適合中老年人
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Call,
+                            contentDescription = "撥打乘客電話",
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Text("撥打", fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        // 語音對講面板
+        if (showVoiceChatPanel) {
+            VoiceChatPanel(
+                messages = voiceChatHistory,
+                currentUserId = driverId,
+                isRecording = isVoiceChatRecording,
+                state = voiceChatState,
+                amplitude = voiceChatAmplitude,
+                onStartRecording = { viewModel.startVoiceChatRecording() },
+                onStopRecording = { viewModel.stopVoiceChatRecording() },
+                onClose = { viewModel.hideVoiceChatPanel() },
+                enabled = viewModel.canUseVoiceChat(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+            )
+        }
     }
 
     // 車資對話框
@@ -488,6 +614,26 @@ fun StatusDisplay(
                     // 顯示距離和時間資訊
                     Spacer(modifier = Modifier.height(8.dp))
 
+                    // 訂單標籤（來源/補貼/寵物）
+                    if (orderState.order.source != null && orderState.order.source != "APP") {
+                        OrderTagRowLarge(order = orderState.order)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    // 電話訂單顯示來電號碼
+                    if (orderState.order.isPhoneOrder()) {
+                        orderState.order.customerPhone?.let { phone ->
+                            Text(
+                                text = "📞 $phone",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFF8C00),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                    }
+
                     // 上車點地址
                     Text(
                         text = "📍 ${orderState.order.pickup.address ?: "未知地址"}",
@@ -512,7 +658,7 @@ fun StatusDisplay(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    text = "${distance} km",
+                                    text = distance.formatKilometers(),
                                     fontSize = 28.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary
@@ -536,7 +682,7 @@ fun StatusDisplay(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    text = "${distance} km",
+                                    text = distance.formatKilometers(),
                                     fontSize = 28.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.secondary
@@ -548,6 +694,28 @@ fun StatusDisplay(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+                            }
+                        }
+
+                        // 預估車資
+                        orderState.order.estimatedFare?.let { fare ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "💰 車資",
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "$$fare",
+                                    fontSize = 28.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF4CAF50)
+                                )
+                                Text(
+                                    text = "預估",
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                     }

@@ -6,15 +6,12 @@ data class SubmitFareRequest(
     @SerializedName("meterAmount")
     val meterAmount: Int,
 
-    @SerializedName("appDistanceMeters")
-    val appDistanceMeters: Int,
+    @SerializedName("distance")
+    val distance: Double? = null,  // 公里數（後端期望 distance）
 
-    @SerializedName("appDurationSeconds")
-    val appDurationSeconds: Int,
+    @SerializedName("duration")
+    val duration: Int? = null,  // 分鐘數（後端期望 duration）
 
     @SerializedName("photoUrl")
-    val photoUrl: String? = null,
-
-    @SerializedName("meterSource")
-    val meterSource: String = "MANUAL"
+    val photoUrl: String? = null
 )

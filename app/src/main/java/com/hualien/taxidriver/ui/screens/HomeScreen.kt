@@ -6,9 +6,16 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -27,7 +34,11 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.ui.components.FareDialog
+import com.hualien.taxidriver.ui.components.MiniVoiceChatButton
 import com.hualien.taxidriver.ui.components.RatingDialog
+import com.hualien.taxidriver.ui.components.OrderTagRow
+import com.hualien.taxidriver.ui.components.VoiceChatPanel
+import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 
 /**
@@ -42,6 +53,14 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
+    // 語音對講狀態
+    val voiceChatHistory by viewModel.voiceChatHistory.collectAsState()
+    val voiceChatState by viewModel.voiceChatState.collectAsState()
+    val isVoiceChatRecording by viewModel.voiceChatRecording.collectAsState()
+    val voiceChatAmplitude by viewModel.voiceChatAmplitude.collectAsState()
+    val showVoiceChatPanel by viewModel.showVoiceChatPanel.collectAsState()
+    val voiceChatUnreadCount by viewModel.voiceChatUnreadCount.collectAsState()
+
     // 處理錯誤訊息
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
@@ -54,7 +73,7 @@ fun HomeScreen(
     var showFareDialog by remember { mutableStateOf(false) }
     var currentOrderIdForFare by remember { mutableStateOf<String?>(null) }
 
-    // 位置權限
+    // 位置權限和錄音權限
     var hasLocationPermission by remember { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -63,14 +82,29 @@ fun HomeScreen(
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
     }
 
-    // 啟動時請求權限
+    // 啟動時請求權限（包含錄音權限，用於語音接單）
     LaunchedEffect(Unit) {
         permissionLauncher.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.RECORD_AUDIO
             )
         )
+    }
+
+    // 初始化語音服務
+    LaunchedEffect(driverId, driverName) {
+        viewModel.initVoiceServices(context, driverId, driverName)
+        viewModel.initVoiceChat(context)  // 初始化語音對講
+    }
+
+    // 當訂單被接受時，設置語音對講用戶資訊
+    LaunchedEffect(uiState.currentOrder?.orderId, uiState.currentOrder?.status) {
+        val order = uiState.currentOrder
+        if (order != null && order.status in listOf(OrderStatus.ACCEPTED, OrderStatus.ARRIVED, OrderStatus.ON_TRIP)) {
+            viewModel.setupVoiceChatUser(order.orderId, driverId, driverName)
+        }
     }
 
     // 建立 WebSocket 連接（司機上線）並設置初始狀態
@@ -79,14 +113,21 @@ fun HomeScreen(
         viewModel.connectWebSocket(driverId)
         // 自動設置為可接單狀態
         viewModel.updateDriverStatus(driverId, DriverAvailability.AVAILABLE)
+        // 加載今日統計
+        viewModel.loadTodayStats(driverId)
     }
 
-    // 清理資源
-    DisposableEffect(Unit) {
-        onDispose {
-            viewModel.disconnectWebSocket()
+    // 監聽新訂單並自動播報（語音接單核心）
+    LaunchedEffect(uiState.currentOrder) {
+        val order = uiState.currentOrder
+        if (order != null && order.status == OrderStatus.OFFERED) {
+            // 新訂單到達，自動播報
+            viewModel.announceNewOrder(order)
         }
     }
+
+    // WebSocket 生命週期由 ViewModel.onCleared() 管理，不在 UI 層斷開
+    // 避免畫面切換/重組時誤觸發斷線
 
     // 根據司機狀態啟動/停止定位服務
     LaunchedEffect(uiState.driverStatus, hasLocationPermission) {
@@ -106,7 +147,9 @@ fun HomeScreen(
         }
     }
 
-    Column(
+    // 使用 Box 包裝，以便加入語音按鈕和指示器
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
@@ -122,7 +165,11 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         // 今日統計卡片
-        TodayStatsCard()
+        TodayStatsCard(
+            orderCount = uiState.todayOrderCount,
+            earnings = uiState.todayEarnings,
+            distance = uiState.todayDistance
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -165,6 +212,14 @@ fun HomeScreen(
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
+                    // 訂單來源 / 補貼 / 寵物 標籤
+                    if (order.source != null && order.source != "APP") {
+                        OrderTagRow(
+                            order = order,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
+
                     // 乘客資訊
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -183,20 +238,81 @@ fun HomeScreen(
                         )
                     }
 
+                    // 電話訂單：來電號碼
+                    if (order.isPhoneOrder() && !order.customerPhone.isNullOrEmpty()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Phone,
+                                contentDescription = "來電號碼",
+                                tint = Color(0xFFFF8C00)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "來電: ${order.customerPhone}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color(0xFFFF8C00),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
+                    // 電話 + 一鍵撥號按鈕
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(bottom = 12.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Phone,
-                            contentDescription = "電話",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = order.passengerPhone ?: "未提供電話",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Phone,
+                                contentDescription = "電話",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = order.passengerPhone ?: "未提供電話",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
+                        // 操作按鈕（語音對講 + 一鍵撥號）
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // 語音對講按鈕（接單後顯示）
+                            if (viewModel.canUseVoiceChat()) {
+                                MiniVoiceChatButton(
+                                    onClick = { viewModel.showVoiceChatPanel() },
+                                    hasUnread = voiceChatUnreadCount > 0
+                                )
+                            }
+
+                            // 一鍵撥號按鈕
+                            order.passengerPhone?.let { phone ->
+                                FilledTonalButton(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_DIAL).apply {
+                                            data = Uri.parse("tel:$phone")
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Call,
+                                        contentDescription = "撥打電話",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("撥打")
+                                }
+                            }
+                        }
                     }
 
                     // 距離和時間資訊（如果有）
@@ -224,7 +340,7 @@ fun HomeScreen(
                                             color = MaterialTheme.colorScheme.onSecondaryContainer
                                         )
                                         Text(
-                                            text = "${distance} km",
+                                            text = distance.formatKilometers(),
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -258,7 +374,7 @@ fun HomeScreen(
                                             color = MaterialTheme.colorScheme.onSecondaryContainer
                                         )
                                         Text(
-                                            text = "${distance} km",
+                                            text = distance.formatKilometers(),
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -270,6 +386,37 @@ fun HomeScreen(
                                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                                             )
                                         }
+                                    }
+                                }
+
+                                // 預估車資
+                                order.estimatedFare?.let { fare ->
+                                    // 分隔線
+                                    if (order.tripDistance != null) {
+                                        Box(
+                                            modifier = Modifier
+                                                .width(1.dp)
+                                                .height(50.dp)
+                                                .background(MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f))
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = "💰 車資",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Text(
+                                            text = "NT$ $fare",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF4CAF50)  // 綠色強調
+                                        )
+                                        Text(
+                                            text = "預估",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
                                     }
                                 }
                             }
@@ -336,6 +483,43 @@ fun HomeScreen(
                                             style = MaterialTheme.typography.bodyLarge,
                                             fontWeight = FontWeight.Medium
                                         )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 電話訂單：目的地確認按鈕
+                    if (order.needsDestinationConfirmation()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFFFF3E0)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "電話訂單 - 請確認目的地",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color(0xFFE65100),
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = { viewModel.confirmDestination(order.orderId) },
+                                        modifier = Modifier.weight(1f),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF4CAF50)
+                                        )
+                                    ) {
+                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("確認目的地")
                                     }
                                 }
                             }
@@ -492,6 +676,36 @@ fun HomeScreen(
             }
         )
     }
+
+        // 語音監聽指示器（新訂單語音接單時顯示）
+        AnimatedVisibility(
+            visible = uiState.isVoiceListening,
+            enter = fadeIn() + slideInVertically { -it },
+            exit = fadeOut() + slideOutVertically { -it },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 60.dp)
+        ) {
+            VoiceListeningIndicator()
+        }
+
+        // 語音對講面板
+        if (showVoiceChatPanel) {
+            VoiceChatPanel(
+                messages = voiceChatHistory,
+                currentUserId = driverId,
+                isRecording = isVoiceChatRecording,
+                state = voiceChatState,
+                amplitude = voiceChatAmplitude,
+                onStartRecording = { viewModel.startVoiceChatRecording() },
+                onStopRecording = { viewModel.stopVoiceChatRecording() },
+                onClose = { viewModel.hideVoiceChatPanel() },
+                enabled = viewModel.canUseVoiceChat(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+            )
+        }
+    } // 關閉 Box
 }
 
 /**
@@ -545,7 +759,11 @@ fun DriverStatusCard(
  * 今日統計卡片
  */
 @Composable
-fun TodayStatsCard() {
+fun TodayStatsCard(
+    orderCount: Int,
+    earnings: Int,
+    distance: Double
+) {
     Card(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -562,9 +780,9 @@ fun TodayStatsCard() {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                StatItem(label = "訂單數", value = "0")
-                StatItem(label = "收入", value = "NT$ 0")
-                StatItem(label = "里程", value = "0 km")
+                StatItem(label = "訂單數", value = "$orderCount")
+                StatItem(label = "收入", value = "NT$ $earnings")
+                StatItem(label = "里程", value = "${String.format("%.1f", distance)} km")
             }
         }
     }
@@ -638,6 +856,49 @@ fun StatusControlButtons(
             )
         ) {
             Text("可接單")
+        }
+    }
+}
+
+/**
+ * 語音監聽指示器
+ * 當系統正在等待司機語音輸入時顯示
+ */
+@Composable
+fun VoiceListeningIndicator() {
+    val infiniteTransition = rememberInfiniteTransition(label = "listening")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = EaseInOut),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = alpha),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = "聆聽中...",
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
         }
     }
 }

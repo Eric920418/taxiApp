@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hualien.taxidriver.data.remote.RetrofitClient
 import com.hualien.taxidriver.domain.model.UserRole
+import com.hualien.taxidriver.utils.FareCalculator
 import com.hualien.taxidriver.navigation.MainNavigation
 import com.hualien.taxidriver.navigation.PassengerNavigation
 import com.hualien.taxidriver.ui.screens.auth.DriverPhoneLoginScreen
@@ -30,6 +31,7 @@ import com.hualien.taxidriver.ui.screens.auth.PassengerPhoneLoginScreen
 import com.hualien.taxidriver.ui.screens.common.RoleSelectionScreen
 import com.hualien.taxidriver.ui.theme.HualienTaxiDriverTheme
 import com.hualien.taxidriver.utils.DataStoreManager
+import com.hualien.taxidriver.utils.PassengerNotificationHelper
 import com.hualien.taxidriver.utils.RoleManager
 import com.hualien.taxidriver.viewmodel.LoginUiState
 import com.hualien.taxidriver.viewmodel.LoginViewModel
@@ -51,9 +53,15 @@ class MainActivity : ComponentActivity() {
         dataStoreManager = DataStoreManager.getInstance(this)
         roleManager = RoleManager(this)
 
+        // 初始化乘客通知頻道（司機到達通知等）
+        PassengerNotificationHelper.createNotificationChannels(this)
+
         // 初始化 token 緩存（避免 AuthInterceptor 使用 runBlocking）
+        // 同時從 Server 載入費率配置
         lifecycleScope.launch {
             dataStoreManager.initializeTokenCache()
+            // 從 Server 載入費率配置（失敗時使用預設值）
+            FareCalculator.loadConfigFromServer()
         }
 
         enableEdgeToEdge()
@@ -129,6 +137,7 @@ fun AppContent(dataStoreManager: DataStoreManager, roleManager: RoleManager) {
                         driverId = driverId ?: "",
                         driverName = driverName ?: "",
                         dataStoreManager = dataStoreManager,
+                        roleManager = roleManager,
                         onLogout = {
                             // 登出將在 MainNavigation 中處理
                         }

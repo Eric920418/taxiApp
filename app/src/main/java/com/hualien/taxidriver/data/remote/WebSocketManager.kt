@@ -2,6 +2,7 @@ package com.hualien.taxidriver.data.remote
 
 import android.util.Log
 import com.google.gson.Gson
+import com.hualien.taxidriver.data.remote.dto.VoiceChatMessage
 import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.utils.Constants
 import io.socket.client.IO
@@ -31,6 +32,7 @@ class WebSocketManager private constructor() {
     // 追踪連接狀態，避免重複連接
     private var isConnecting = false
     private var currentMode: ConnectionMode? = null
+    private var lastConnectionMode: ConnectionMode? = null  // 記住上次模式，用於重連
 
     // ===== 智能重連相關 =====
     private var reconnectJob: Job? = null
@@ -69,6 +71,14 @@ class WebSocketManager private constructor() {
     private val _driverLocation = MutableStateFlow<DriverLocationInfo?>(null)
     val driverLocation: StateFlow<DriverLocationInfo?> = _driverLocation.asStateFlow()
 
+    // 語音對講：收到的語音訊息
+    private val _voiceChatMessage = MutableStateFlow<VoiceChatMessage?>(null)
+    val voiceChatMessage: StateFlow<VoiceChatMessage?> = _voiceChatMessage.asStateFlow()
+
+    // 電話叫車：催單通知
+    private val _orderUrge = MutableStateFlow<OrderUrgeInfo?>(null)
+    val orderUrge: StateFlow<OrderUrgeInfo?> = _orderUrge.asStateFlow()
+
     // Coroutine scope for reconnection
     private val reconnectScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -95,10 +105,10 @@ class WebSocketManager private constructor() {
                 cleanupSocket()
 
                 val options = IO.Options().apply {
-                    reconnection = true
-                    reconnectionDelay = Constants.WS_RECONNECT_DELAY
-                    reconnectionAttempts = Constants.WS_MAX_RECONNECT_ATTEMPTS
-                    timeout = 10000L  // 添加10秒連接超時
+                    // 禁用 Socket.io 內建重連，完全由自定義 scheduleReconnect() 管理
+                    // 避免兩套重連機制打架導致秒斷循環
+                    reconnection = false
+                    timeout = 20000L  // 連接超時 20 秒
                 }
 
                 // 創建新的 socket 實例
@@ -112,6 +122,7 @@ class WebSocketManager private constructor() {
                 socket?.connect()
 
                 currentMode = ConnectionMode.DRIVER
+                lastConnectionMode = ConnectionMode.DRIVER
                 isConnecting = false
             } catch (e: Exception) {
                 Log.e(TAG, "❌ 初始化司機端 WebSocket 失敗", e)
@@ -146,12 +157,17 @@ class WebSocketManager private constructor() {
             }
 
             on(Socket.EVENT_DISCONNECT) { args ->
+                val reason = args.firstOrNull()?.toString() ?: "unknown"
                 Log.w(TAG, "❌ 司機端 WebSocket 已斷開")
-                Log.w(TAG, "斷開原因: ${args.firstOrNull()}")
+                Log.w(TAG, "========== 斷線診斷 ==========")
+                Log.w(TAG, "斷線原因: $reason")
+                Log.w(TAG, "分類: ${classifyDisconnectReason(reason)}")
+                Log.w(TAG, "當前模式: $currentMode")
+                Log.w(TAG, "================================")
                 _isConnected.value = false
 
-                // 觸發智能重連（非手動斷開）
-                if (currentMode == ConnectionMode.DRIVER) {
+                // 僅在非手動斷開（io client disconnect）時重連
+                if (currentMode == ConnectionMode.DRIVER && reason != "io client disconnect") {
                     scheduleReconnect()
                 }
             }
@@ -190,6 +206,9 @@ class WebSocketManager private constructor() {
                         order.tripDistance?.let { d ->
                             Log.d(TAG, "行程: ${d}km, 約${order.estimatedTripDuration}分鐘")
                         }
+                        // 預估車資
+                        Log.d(TAG, "預估車資: ${order.estimatedFare ?: "null"}")
+                        Log.d(TAG, "目的地: ${order.destination?.address ?: "未設定"}")
 
                         _orderOffer.value = order
                     }
@@ -215,7 +234,32 @@ class WebSocketManager private constructor() {
                 }
             }
 
-            // 智能派單 V2：監聽批次超時
+            // 監聽訂單被其他司機接走
+            on("order:taken") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 order:taken 事件（訂單已被其他司機接走）")
+                    val data = args.firstOrNull() as? JSONObject
+                    Log.d(TAG, "訂單被接走資料: $data")
+
+                    data?.let {
+                        val orderId = it.getString("orderId")
+                        val message = it.optString("message", "此訂單已被其他司機接走")
+                        Log.d(TAG, "⚠️ 訂單 $orderId 已被接走: $message")
+
+                        // 清除當前訂單 offer（如果是同一訂單）
+                        _orderOffer.value?.let { currentOrder ->
+                            if (currentOrder.orderId == orderId) {
+                                Log.d(TAG, "🗑️ 清除訂單 offer: $orderId")
+                                _orderOffer.value = null
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析 order:taken 失敗", e)
+                }
+            }
+
+            // 智能派單 V2：監聯批次超時
             on("order:batch-timeout") { args ->
                 try {
                     Log.d(TAG, "📥 收到 order:batch-timeout 事件")
@@ -242,18 +286,67 @@ class WebSocketManager private constructor() {
                     Log.e(TAG, "❌ 解析批次超時失敗", e)
                 }
             }
+
+            // 電話叫車：監聽催單通知
+            on("order:urge") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 order:urge 事件（催單）")
+                    val data = args.firstOrNull() as? JSONObject
+                    Log.d(TAG, "催單資料: $data")
+
+                    data?.let {
+                        val urgeInfo = OrderUrgeInfo(
+                            orderId = it.getString("orderId"),
+                            message = it.optString("message", "乘客催促您盡快前往"),
+                            callerNumber = it.optString("callerNumber", null),
+                            urgencyLevel = it.optInt("urgencyLevel", 1)
+                        )
+                        Log.d(TAG, "⚡ 催單: 訂單 ${urgeInfo.orderId}, 等級: ${urgeInfo.urgencyLevel}")
+                        _orderUrge.value = urgeInfo
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析催單通知失敗", e)
+                }
+            }
+
+            // 語音對講：監聽乘客發來的語音訊息
+            on("voice:message") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 voice:message 事件（司機端）")
+                    val data = args.firstOrNull() as? JSONObject
+                    Log.d(TAG, "語音訊息資料: $data")
+
+                    data?.let {
+                        val message = VoiceChatMessage(
+                            messageId = it.optString("messageId", java.util.UUID.randomUUID().toString()),
+                            orderId = it.getString("orderId"),
+                            senderId = it.getString("senderId"),
+                            senderType = it.getString("senderType"),
+                            senderName = it.optString("senderName", "乘客"),
+                            messageText = it.getString("messageText"),
+                            timestamp = it.optLong("timestamp", System.currentTimeMillis())
+                        )
+                        Log.d(TAG, "✅ 收到語音訊息: ${message.senderName}說「${message.messageText}」")
+                        _voiceChatMessage.value = message
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析語音訊息失敗", e)
+                }
+            }
         }
     }
 
     /**
      * 更新司機定位
+     * @param orderId 當司機處於 ON_TRIP 狀態時傳入訂單ID，用於後台軌跡追蹤
      */
     fun updateLocation(
         driverId: String,
         latitude: Double,
         longitude: Double,
         speed: Float = 0f,
-        bearing: Float = 0f
+        bearing: Float = 0f,
+        orderId: String? = null
     ) {
         socket?.emit("driver:location", JSONObject().apply {
             put("driverId", driverId)
@@ -261,6 +354,7 @@ class WebSocketManager private constructor() {
             put("lng", longitude)
             put("speed", speed)
             put("bearing", bearing)
+            orderId?.let { put("orderId", it) }
         })
     }
 
@@ -300,6 +394,58 @@ class WebSocketManager private constructor() {
         })
     }
 
+    // ===== 語音對講相關方法 =====
+
+    /**
+     * 發送語音訊息
+     * @param orderId 訂單ID
+     * @param senderId 發送者ID（司機ID 或 乘客ID）
+     * @param senderName 發送者名稱
+     * @param senderType 發送者類型（"driver" 或 "passenger"）
+     * @param messageText 訊息文字（語音轉錄後的文字）
+     */
+    fun sendVoiceMessage(
+        orderId: String,
+        senderId: String,
+        senderName: String,
+        senderType: String,
+        messageText: String
+    ) {
+        val messageId = java.util.UUID.randomUUID().toString()
+        val timestamp = System.currentTimeMillis()
+
+        Log.d(TAG, "========== 發送語音訊息 ==========")
+        Log.d(TAG, "訂單ID: $orderId")
+        Log.d(TAG, "發送者: $senderName ($senderType)")
+        Log.d(TAG, "訊息內容: $messageText")
+
+        socket?.emit("voice:message", JSONObject().apply {
+            put("messageId", messageId)
+            put("orderId", orderId)
+            put("senderId", senderId)
+            put("senderName", senderName)
+            put("senderType", senderType)
+            put("messageText", messageText)
+            put("timestamp", timestamp)
+        })
+
+        Log.d(TAG, "✅ voice:message 事件已發送")
+    }
+
+    /**
+     * 清除語音訊息（處理完畢後調用）
+     */
+    fun clearVoiceChatMessage() {
+        _voiceChatMessage.value = null
+    }
+
+    /**
+     * 清除催單通知（處理完畢後調用）
+     */
+    fun clearOrderUrge() {
+        _orderUrge.value = null
+    }
+
     /**
      * 完全清理 Socket 連接
      */
@@ -311,6 +457,16 @@ class WebSocketManager private constructor() {
         }
         socket = null
         currentMode = null
+
+        // 【重要】清除所有 StateFlow 數據，防止舊訂單殘留
+        Log.d(TAG, "清理所有 StateFlow 數據...")
+        _orderOffer.value = null
+        _orderStatusUpdate.value = null
+        _batchTimeout.value = null
+        _passengerOrderUpdate.value = null
+        _driverLocation.value = null
+        _voiceChatMessage.value = null
+        _orderUrge.value = null
     }
 
     /**
@@ -362,10 +518,9 @@ class WebSocketManager private constructor() {
                 cleanupSocket()
 
                 val options = IO.Options().apply {
-                    reconnection = true
-                    reconnectionDelay = Constants.WS_RECONNECT_DELAY
-                    reconnectionAttempts = Constants.WS_MAX_RECONNECT_ATTEMPTS
-                    timeout = 10000L  // 添加10秒連接超時
+                    // 禁用 Socket.io 內建重連，完全由自定義 scheduleReconnect() 管理
+                    reconnection = false
+                    timeout = 20000L  // 連接超時 20 秒
                 }
 
                 // 創建新的 socket 實例
@@ -379,6 +534,7 @@ class WebSocketManager private constructor() {
                 socket?.connect()
 
                 currentMode = ConnectionMode.PASSENGER
+                lastConnectionMode = ConnectionMode.PASSENGER
                 isConnecting = false
             } catch (e: Exception) {
                 Log.e(TAG, "❌ 初始化乘客端 WebSocket 失敗", e)
@@ -413,12 +569,17 @@ class WebSocketManager private constructor() {
             }
 
             on(Socket.EVENT_DISCONNECT) { args ->
+                val reason = args.firstOrNull()?.toString() ?: "unknown"
                 Log.w(TAG, "❌ 乘客端 WebSocket 已斷開")
-                Log.w(TAG, "斷開原因: ${args.firstOrNull()}")
+                Log.w(TAG, "========== 斷線診斷 ==========")
+                Log.w(TAG, "斷線原因: $reason")
+                Log.w(TAG, "分類: ${classifyDisconnectReason(reason)}")
+                Log.w(TAG, "當前模式: $currentMode")
+                Log.w(TAG, "================================")
                 _isConnected.value = false
 
-                // 觸發智能重連（非手動斷開）
-                if (currentMode == ConnectionMode.PASSENGER) {
+                // 僅在非手動斷開時重連
+                if (currentMode == ConnectionMode.PASSENGER && reason != "io client disconnect") {
                     scheduleReconnect()
                 }
             }
@@ -478,7 +639,7 @@ class WebSocketManager private constructor() {
                 }
             }
 
-            // 監聽司機實時位置
+            // 監聽司機實時位置（含 ETA 資訊）
             on("driver:location") { args ->
                 try {
                     val data = args.firstOrNull() as? JSONObject
@@ -489,13 +650,41 @@ class WebSocketManager private constructor() {
                             longitude = it.getDouble("lng"),
                             speed = it.optDouble("speed", 0.0).toFloat(),
                             bearing = it.optDouble("bearing", 0.0).toFloat(),
-                            timestamp = it.optLong("timestamp", System.currentTimeMillis())
+                            timestamp = it.optLong("timestamp", System.currentTimeMillis()),
+                            orderId = it.optString("orderId", null),
+                            distanceToPickup = if (it.has("distanceToPickup")) it.getInt("distanceToPickup") else null,
+                            etaMinutes = if (it.has("etaMinutes")) it.getInt("etaMinutes") else null
                         )
-                        Log.d(TAG, "📥 收到司機位置: ${driverLocation.driverId}")
+                        Log.d(TAG, "📥 收到司機位置: ${driverLocation.driverId}, 距離: ${driverLocation.distanceToPickup}m, ETA: ${driverLocation.etaMinutes}分")
                         _driverLocation.value = driverLocation
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ 解析司機位置失敗", e)
+                }
+            }
+
+            // 語音對講：監聽司機發來的語音訊息
+            on("voice:message") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 voice:message 事件（乘客端）")
+                    val data = args.firstOrNull() as? JSONObject
+                    Log.d(TAG, "語音訊息資料: $data")
+
+                    data?.let {
+                        val message = VoiceChatMessage(
+                            messageId = it.optString("messageId", java.util.UUID.randomUUID().toString()),
+                            orderId = it.getString("orderId"),
+                            senderId = it.getString("senderId"),
+                            senderType = it.getString("senderType"),
+                            senderName = it.optString("senderName", "司機"),
+                            messageText = it.getString("messageText"),
+                            timestamp = it.optLong("timestamp", System.currentTimeMillis())
+                        )
+                        Log.d(TAG, "✅ 收到語音訊息: ${message.senderName}說「${message.messageText}」")
+                        _voiceChatMessage.value = message
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析語音訊息失敗", e)
                 }
             }
         }
@@ -562,7 +751,8 @@ class WebSocketManager private constructor() {
      */
     private suspend fun performReconnect() {
         val userId = lastUserId
-        val mode = currentMode
+        // 在 cleanupSocket 之前保存 mode（cleanupSocket 會清除 currentMode）
+        val mode = currentMode ?: lastConnectionMode
 
         if (userId == null || mode == null) {
             Log.e(TAG, "❌ 無法重連：缺少用戶ID或連接模式")
@@ -584,6 +774,7 @@ class WebSocketManager private constructor() {
         } catch (e: Exception) {
             Log.e(TAG, "❌ 重連失敗", e)
             // 重連失敗，繼續調度下一次重連
+            currentMode = mode  // 恢復 mode 以便下次重連
             scheduleReconnect()
         }
     }
@@ -620,6 +811,20 @@ class WebSocketManager private constructor() {
         }
     }
 
+    /**
+     * 分類斷線原因，協助診斷
+     */
+    private fun classifyDisconnectReason(reason: String): String {
+        return when {
+            reason.contains("io server disconnect") -> "伺服器主動斷開（可能是認證問題或伺服器重啟）"
+            reason.contains("io client disconnect") -> "客戶端主動斷開（正常登出或 disconnect() 調用）"
+            reason.contains("ping timeout") -> "心跳超時（網路不穩或伺服器無回應）"
+            reason.contains("transport close") -> "傳輸層關閉（網路中斷或切換 WiFi/行動網路）"
+            reason.contains("transport error") -> "傳輸層錯誤（網路異常）"
+            else -> "未知原因: $reason"
+        }
+    }
+
     companion object {
         private const val TAG = "WebSocketManager"
 
@@ -650,7 +855,7 @@ data class NearbyDriverInfo(
 )
 
 /**
- * 司機實時位置信息
+ * 司機實時位置信息（含 ETA 資訊）
  */
 data class DriverLocationInfo(
     val driverId: String,
@@ -658,7 +863,10 @@ data class DriverLocationInfo(
     val longitude: Double,
     val speed: Float,
     val bearing: Float,
-    val timestamp: Long
+    val timestamp: Long,
+    val orderId: String? = null,
+    val distanceToPickup: Int? = null,  // 到上車點距離（公尺）
+    val etaMinutes: Int? = null         // 預估到達時間（分鐘）
 )
 
 /**
@@ -697,4 +905,14 @@ sealed class ReconnectState {
 data class BatchTimeoutInfo(
     val orderId: String,
     val message: String
+)
+
+/**
+ * 電話叫車：催單資訊
+ */
+data class OrderUrgeInfo(
+    val orderId: String,
+    val message: String,
+    val callerNumber: String? = null,
+    val urgencyLevel: Int = 1  // 1=普通催單, 2=緊急催單
 )

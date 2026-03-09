@@ -91,7 +91,9 @@ class PassengerRepository {
         destLat: Double? = null,
         destLng: Double? = null,
         destAddress: String? = null,
-        paymentType: String = "CASH"
+        paymentType: String = "CASH",
+        tripDistanceMeters: Int? = null,
+        estimatedFare: Int? = null
     ): Result<RideRequestResult> {
         return try {
             val request = RideRequest(
@@ -104,7 +106,9 @@ class PassengerRepository {
                 destLat = destLat,
                 destLng = destLng,
                 destAddress = destAddress,
-                paymentType = paymentType
+                paymentType = paymentType,
+                tripDistanceMeters = tripDistanceMeters,
+                estimatedFare = estimatedFare
             )
 
             android.util.Log.d("PassengerRepository", "========== API請求開始 ==========")
@@ -193,7 +197,24 @@ class PassengerRepository {
             if (response.isSuccessful && response.body()?.success == true) {
                 Result.success(response.body()!!.message ?: "訂單已取消")
             } else {
-                Result.failure(Exception("取消失敗：${response.body()?.error ?: response.message()}"))
+                // 當 API 返回錯誤（如 400）時，需要解析 errorBody 來獲取真正的錯誤訊息
+                val errorMessage = if (!response.isSuccessful) {
+                    try {
+                        val errorBody = response.errorBody()?.string()
+                        android.util.Log.d("PassengerRepository", "Cancel order error body: $errorBody")
+                        // 嘗試解析 JSON 錯誤訊息 {"error":"訂單狀態為 CANCELLED，無法取消"}
+                        val jsonError = errorBody?.let {
+                            com.google.gson.Gson().fromJson(it, CancelOrderResponse::class.java)
+                        }
+                        jsonError?.error ?: response.message()
+                    } catch (e: Exception) {
+                        android.util.Log.e("PassengerRepository", "Error parsing error body: ${e.message}")
+                        response.message()
+                    }
+                } else {
+                    response.body()?.error ?: response.message()
+                }
+                Result.failure(Exception("取消失敗：$errorMessage"))
             }
         } catch (e: Exception) {
             Result.failure(Exception("網路錯誤：${e.message}"))
@@ -233,44 +254,10 @@ class PassengerRepository {
 
     /**
      * 將 OrderDto 轉換為 Order Domain Model
+     * 直接使用 OrderDto 的 toDomainOrder() 方法
      */
     private fun mapOrderDtoToOrder(dto: OrderDto): Order {
-        return Order(
-            orderId = dto.orderId,
-            passengerId = dto.passengerId ?: "",
-            passengerName = dto.passengerName ?: "乘客",
-            passengerPhone = dto.passengerPhone,
-            driverId = dto.driverId,
-            driverName = dto.driverName,
-            driverPhone = dto.driverPhone,
-            pickup = Location(
-                latitude = dto.pickup.lat,
-                longitude = dto.pickup.lng,
-                address = dto.pickup.address
-            ),
-            destination = dto.destination?.let {
-                Location(
-                    latitude = it.lat,
-                    longitude = it.lng,
-                    address = it.address
-                )
-            },
-            statusString = dto.status,
-            paymentType = try {
-                com.hualien.taxidriver.domain.model.PaymentType.valueOf(dto.paymentType)
-            } catch (e: Exception) {
-                com.hualien.taxidriver.domain.model.PaymentType.CASH
-            },
-            fare = dto.fare?.let { fareAmount ->
-                com.hualien.taxidriver.domain.model.Fare(
-                    meterAmount = fareAmount.toInt(),
-                    appDistanceMeters = dto.distance?.times(1000)?.toInt() ?: 0
-                )
-            },
-            createdAt = dto.createdAt,
-            acceptedAt = dto.acceptedAt,
-            completedAt = dto.completedAt
-        )
+        return dto.toDomainOrder()
     }
 }
 

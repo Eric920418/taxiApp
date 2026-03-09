@@ -103,7 +103,12 @@ data class RideRequest(
     @SerializedName("destAddress")
     val destAddress: String? = null,
     @SerializedName("paymentType")
-    val paymentType: String = "CASH"
+    val paymentType: String = "CASH",
+    // 乘客端計算的道路距離和車資（Google Directions API）
+    @SerializedName("tripDistanceMeters")
+    val tripDistanceMeters: Int? = null,
+    @SerializedName("estimatedFare")
+    val estimatedFare: Int? = null
 )
 
 /**
@@ -124,6 +129,8 @@ data class RideResponse(
 
 /**
  * 訂單信息（DTO）
+ * 注意：日期欄位為 ISO 8601 格式字串（如 "2026-01-01T10:27:19.735Z"）
+ * 此 DTO 用於接收後端 API 響應，然後轉換為 domain Order 模型
  */
 data class OrderDto(
     @SerializedName("orderId")
@@ -147,18 +154,162 @@ data class OrderDto(
     @SerializedName("status")
     val status: String,
     @SerializedName("paymentType")
-    val paymentType: String,
+    val paymentType: String? = null,
     @SerializedName("fare")
-    val fare: Double? = null,
+    val fare: FareDto? = null,
     @SerializedName("distance")
     val distance: Double? = null,
+
+    // === 日期欄位 (ISO 8601 格式) ===
     @SerializedName("createdAt")
-    val createdAt: Long,
+    val createdAt: String? = null,
     @SerializedName("acceptedAt")
-    val acceptedAt: Long? = null,
+    val acceptedAt: String? = null,
+    @SerializedName("arrivedAt")
+    val arrivedAt: String? = null,
+    @SerializedName("startedAt")
+    val startedAt: String? = null,
     @SerializedName("completedAt")
-    val completedAt: Long? = null
-)
+    val completedAt: String? = null,
+
+    // === 取消相關 ===
+    @SerializedName("cancelledBy")
+    val cancelledBy: String? = null,
+
+    // === 訂單派發時的距離和預估時間資訊 ===
+    @SerializedName("distanceToPickup")
+    val distanceToPickup: Double? = null,
+    @SerializedName("etaToPickup")
+    val etaToPickup: Int? = null,
+    @SerializedName("tripDistance")
+    val tripDistance: Double? = null,
+    @SerializedName("estimatedTripDuration")
+    val estimatedTripDuration: Int? = null,
+
+    // === 智能派單系統 V2 新增欄位 ===
+    @SerializedName("batchNumber")
+    val batchNumber: Int? = null,
+    @SerializedName("estimatedFare")
+    val estimatedFare: Int? = null,
+    @SerializedName("googleEtaSeconds")
+    val googleEtaSeconds: Int? = null,
+    @SerializedName("responseDeadline")
+    val responseDeadline: Long? = null,
+    @SerializedName("dispatchMethod")
+    val dispatchMethod: String? = null,
+
+    // === 電話叫車系統擴展欄位 ===
+    @SerializedName("source")
+    val source: String? = null,
+    @SerializedName("subsidyType")
+    val subsidyType: String? = null,
+    @SerializedName("petPresent")
+    val petPresent: String? = null,
+    @SerializedName("petCarrier")
+    val petCarrier: String? = null,
+    @SerializedName("petNote")
+    val petNote: String? = null,
+    @SerializedName("customerPhone")
+    val customerPhone: String? = null,
+    @SerializedName("destinationConfirmed")
+    val destinationConfirmed: Boolean? = null,
+    @SerializedName("callId")
+    val callId: String? = null
+) {
+    /**
+     * 將 ISO 8601 日期字串轉換為時間戳（毫秒）
+     */
+    fun getCreatedAtTimestamp(): Long? {
+        return createdAt?.let { parseIsoDate(it) }
+    }
+
+    fun getAcceptedAtTimestamp(): Long? {
+        return acceptedAt?.let { parseIsoDate(it) }
+    }
+
+    fun getArrivedAtTimestamp(): Long? {
+        return arrivedAt?.let { parseIsoDate(it) }
+    }
+
+    fun getStartedAtTimestamp(): Long? {
+        return startedAt?.let { parseIsoDate(it) }
+    }
+
+    fun getCompletedAtTimestamp(): Long? {
+        return completedAt?.let { parseIsoDate(it) }
+    }
+
+    private fun parseIsoDate(isoDate: String): Long? {
+        return try {
+            java.time.Instant.parse(isoDate).toEpochMilli()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * 將 DTO 轉換為 domain Order 模型
+     */
+    fun toDomainOrder(): com.hualien.taxidriver.domain.model.Order {
+        return com.hualien.taxidriver.domain.model.Order(
+            orderId = orderId,
+            passengerId = passengerId ?: "",
+            passengerName = passengerName ?: "乘客",
+            passengerPhone = passengerPhone,
+            driverId = driverId,
+            driverName = driverName,
+            driverPhone = driverPhone,
+            pickup = com.hualien.taxidriver.domain.model.Location(
+                latitude = pickup.lat,
+                longitude = pickup.lng,
+                address = pickup.address
+            ),
+            destination = destination?.let {
+                com.hualien.taxidriver.domain.model.Location(
+                    latitude = it.lat,
+                    longitude = it.lng,
+                    address = it.address
+                )
+            },
+            statusString = status,
+            paymentType = try {
+                paymentType?.let { com.hualien.taxidriver.domain.model.PaymentType.valueOf(it) }
+                    ?: com.hualien.taxidriver.domain.model.PaymentType.CASH
+            } catch (e: Exception) {
+                com.hualien.taxidriver.domain.model.PaymentType.CASH
+            },
+            createdAt = getCreatedAtTimestamp() ?: System.currentTimeMillis(),
+            acceptedAt = getAcceptedAtTimestamp(),
+            arrivedAt = getArrivedAtTimestamp(),
+            startedAt = getStartedAtTimestamp(),
+            completedAt = getCompletedAtTimestamp(),
+            cancelledBy = cancelledBy,
+            fare = fare?.let { fareDto ->
+                com.hualien.taxidriver.domain.model.Fare(
+                    meterAmount = fareDto.meterAmount,
+                    appDistanceMeters = fareDto.appDistanceMeters ?: 0
+                )
+            },
+            distanceToPickup = distanceToPickup,
+            etaToPickup = etaToPickup,
+            tripDistance = tripDistance,
+            estimatedTripDuration = estimatedTripDuration,
+            batchNumber = batchNumber,
+            estimatedFare = estimatedFare,
+            googleEtaSeconds = googleEtaSeconds,
+            responseDeadline = responseDeadline,
+            dispatchMethod = dispatchMethod,
+            source = source ?: "APP",
+            subsidyType = subsidyType ?: "NONE",
+            petPresent = petPresent ?: "UNKNOWN",
+            petCarrier = petCarrier ?: "UNKNOWN",
+            petNote = petNote,
+            customerPhone = customerPhone,
+            destinationConfirmed = destinationConfirmed ?: false,
+            callId = callId
+        )
+    }
+}
 
 /**
  * 詳細位置信息（包含地址）
@@ -170,6 +321,16 @@ data class LocationDetailDto(
     val lng: Double,
     @SerializedName("address")
     val address: String
+)
+
+/**
+ * 車資信息
+ */
+data class FareDto(
+    @SerializedName("meterAmount")
+    val meterAmount: Int,
+    @SerializedName("appDistanceMeters")
+    val appDistanceMeters: Int? = null
 )
 
 /**
@@ -241,7 +402,7 @@ data class PassengerProfileDto(
     @SerializedName("totalTrips")
     val totalTrips: Int,
     @SerializedName("createdAt")
-    val createdAt: Long?
+    val createdAt: String? = null  // ISO 8601 格式
 )
 
 /**
@@ -287,9 +448,9 @@ data class PassengerRatingDto(
     @SerializedName("comment")
     val comment: String?,
     @SerializedName("createdAt")
-    val createdAt: Long,
+    val createdAt: String? = null,  // ISO 8601 格式
     @SerializedName("tripDate")
-    val tripDate: Long?
+    val tripDate: String? = null    // ISO 8601 格式
 )
 
 /**

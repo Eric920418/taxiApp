@@ -2,9 +2,11 @@ package com.hualien.taxidriver.ui.screens.passenger
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.location.Geocoder
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -31,8 +33,10 @@ import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.*
 import com.hualien.taxidriver.R
+import com.hualien.taxidriver.ui.components.MiniVoiceChatButton
 import com.hualien.taxidriver.ui.components.PlaceSelectionDialog
 import com.hualien.taxidriver.ui.components.RatingDialog
+import com.hualien.taxidriver.ui.components.VoiceChatPanel
 import com.hualien.taxidriver.utils.Constants
 import com.hualien.taxidriver.utils.AddressUtils
 import com.hualien.taxidriver.utils.GeocodingUtils
@@ -57,6 +61,14 @@ fun PassengerHomeScreen(
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     val scope = rememberCoroutineScope()
+
+    // 語音對講狀態
+    val voiceChatHistory by viewModel.voiceChatHistory.collectAsState()
+    val voiceChatState by viewModel.voiceChatState.collectAsState()
+    val isVoiceChatRecording by viewModel.voiceChatRecording.collectAsState()
+    val voiceChatAmplitude by viewModel.voiceChatAmplitude.collectAsState()
+    val showVoiceChatPanel by viewModel.showVoiceChatPanel.collectAsState()
+    val voiceChatUnreadCount by viewModel.voiceChatUnreadCount.collectAsState()
 
     // Snackbar 狀態
     val snackbarHostState = remember { SnackbarHostState() }
@@ -112,8 +124,13 @@ fun PassengerHomeScreen(
         }
     }
 
+    // 使用 rememberUpdatedState 確保 LaunchedEffect 使用最新值
+    val currentRatingSubmitted by rememberUpdatedState(ratingSubmitted)
+    val currentShowCompletedDialog by rememberUpdatedState(showCompletedDialog)
+
     // 監聽訂單狀態變化並顯示提示
     LaunchedEffect(uiState.orderStatus) {
+        android.util.Log.d("PassengerHomeScreen", "LaunchedEffect 觸發: orderStatus=${uiState.orderStatus}, ratingSubmitted=$currentRatingSubmitted, showCompletedDialog=$currentShowCompletedDialog")
         when (uiState.orderStatus) {
             com.hualien.taxidriver.viewmodel.OrderStatus.WAITING -> {
                 snackbarHostState.showSnackbar(
@@ -135,9 +152,14 @@ fun PassengerHomeScreen(
             }
             com.hualien.taxidriver.viewmodel.OrderStatus.COMPLETED -> {
                 // 訂單完成時，保存訂單信息並顯示完成對話框
-                uiState.currentOrder?.let { order ->
-                    completedOrder = order
-                    showCompletedDialog = true
+                // 注意：只有當未評價過且對話框未顯示時才顯示
+                android.util.Log.d("PassengerHomeScreen", "COMPLETED: ratingSubmitted=$currentRatingSubmitted, showCompletedDialog=$currentShowCompletedDialog, currentOrder=${uiState.currentOrder?.orderId}")
+                if (!currentRatingSubmitted && !currentShowCompletedDialog) {
+                    uiState.currentOrder?.let { order ->
+                        android.util.Log.d("PassengerHomeScreen", "顯示完成對話框: orderId=${order.orderId}")
+                        completedOrder = order
+                        showCompletedDialog = true
+                    }
                 }
             }
             com.hualien.taxidriver.viewmodel.OrderStatus.CANCELLED -> {
@@ -426,11 +448,31 @@ fun PassengerHomeScreen(
                     onCancelOrder = {
                         viewModel.cancelOrder(passengerId)
                     },
+                    canUseVoiceChat = viewModel.canUseVoiceChat(),
+                    voiceChatUnreadCount = voiceChatUnreadCount,
+                    onVoiceChatClick = { viewModel.showVoiceChatPanel() },
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 80.dp, start = 16.dp, end = 16.dp)
                 )
             }
+        }
+
+        // 語音對講面板
+        if (showVoiceChatPanel) {
+            VoiceChatPanel(
+                messages = voiceChatHistory,
+                currentUserId = passengerId,
+                isRecording = isVoiceChatRecording,
+                state = voiceChatState,
+                amplitude = voiceChatAmplitude,
+                onStartRecording = { viewModel.startVoiceChatRecording() },
+                onStopRecording = { viewModel.stopVoiceChatRecording() },
+                onClose = { viewModel.hideVoiceChatPanel() },
+                enabled = viewModel.canUseVoiceChat(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+            )
         }
 
         // Uber 風格的頂部搜尋框
@@ -812,15 +854,31 @@ fun PassengerHomeScreen(
                 showRatingDialog = false
             },
             onSubmit = { rating, comment ->
+                // 保存訂單資訊，避免在回調中使用可能被清除的變數
+                val orderIdToRate = completedOrder?.orderId ?: ""
+                val driverIdToRate = completedOrder?.driverId ?: ""
+
                 viewModel.submitDriverRating(
                     passengerId = passengerId,
-                    orderId = completedOrder?.orderId ?: "",
-                    driverId = completedOrder?.driverId ?: "",
+                    orderId = orderIdToRate,
+                    driverId = driverIdToRate,
                     rating = rating,
                     comment = comment,
                     onSuccess = {
-                        showRatingDialog = false
+                        android.util.Log.d("PassengerHomeScreen", "========== 評價成功回調 ==========")
+                        android.util.Log.d("PassengerHomeScreen", "設置 ratingSubmitted = true")
+                        // 先標記已評價，防止 LaunchedEffect 重新觸發
                         ratingSubmitted = true
+                        android.util.Log.d("PassengerHomeScreen", "設置 showRatingDialog = false")
+                        showRatingDialog = false
+                        android.util.Log.d("PassengerHomeScreen", "設置 showCompletedDialog = false")
+                        showCompletedDialog = false
+                        android.util.Log.d("PassengerHomeScreen", "設置 completedOrder = null")
+                        completedOrder = null
+                        android.util.Log.d("PassengerHomeScreen", "調用 viewModel.clearOrder()")
+                        viewModel.clearOrder()
+                        android.util.Log.d("PassengerHomeScreen", "評價完成，所有狀態已更新")
+                        // 顯示成功提示
                         scope.launch {
                             snackbarHostState.showSnackbar(
                                 message = "感謝您的評價！",
@@ -829,8 +887,8 @@ fun PassengerHomeScreen(
                         }
                     },
                     onError = { errorMessage ->
-                        showRatingDialog = false
                         scope.launch {
+                            showRatingDialog = false
                             snackbarHostState.showSnackbar(
                                 message = "評價失敗：$errorMessage",
                                 duration = SnackbarDuration.Short
@@ -1224,8 +1282,12 @@ fun OrderStatusCard(
     order: com.hualien.taxidriver.domain.model.Order,
     orderStatus: com.hualien.taxidriver.viewmodel.OrderStatus,
     onCancelOrder: () -> Unit,
+    canUseVoiceChat: Boolean = false,
+    voiceChatUnreadCount: Int = 0,
+    onVoiceChatClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var showCancelDialog by remember { mutableStateOf(false) }
 
     Card(
@@ -1348,26 +1410,66 @@ fun OrderStatusCard(
                 if (orderStatus != com.hualien.taxidriver.viewmodel.OrderStatus.WAITING &&
                     order.driverName != null) {
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = order.driverName,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Bold
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
                             )
-                            order.driverPhone?.let { phone ->
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
                                 Text(
-                                    text = phone,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = order.driverName,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold
                                 )
+                                order.driverPhone?.let { phone ->
+                                    Text(
+                                        text = phone,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        // 操作按鈕
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // 語音對講按鈕
+                            if (canUseVoiceChat) {
+                                MiniVoiceChatButton(
+                                    onClick = onVoiceChatClick,
+                                    hasUnread = voiceChatUnreadCount > 0
+                                )
+                            }
+
+                            // 一鍵撥號按鈕
+                            order.driverPhone?.let { phone ->
+                                FilledTonalButton(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_DIAL).apply {
+                                            data = Uri.parse("tel:$phone")
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Call,
+                                        contentDescription = "撥打司機電話",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("撥打")
+                                }
                             }
                         }
                     }

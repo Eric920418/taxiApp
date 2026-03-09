@@ -1,22 +1,29 @@
 package com.hualien.taxidriver.data.remote.dto
 
-import com.hualien.taxidriver.domain.model.Order
+import com.google.gson.annotations.SerializedName
 
 /**
  * 訂單列表回應
+ * 使用 OrderDto 來處理 ISO 8601 日期格式
  */
 data class OrderListResponse(
-    val orders: List<Order>,
+    @SerializedName("orders")
+    val orders: List<OrderDto>,
+    @SerializedName("total")
     val total: Int
 )
 
 /**
  * 接受訂單回應
+ * 使用 OrderDto 來處理 ISO 8601 日期格式
  */
 data class AcceptOrderResponse(
+    @SerializedName("success")
     val success: Boolean,
+    @SerializedName("message")
     val message: String,
-    val order: Order
+    @SerializedName("order")
+    val order: OrderDto
 )
 
 /**
@@ -75,7 +82,7 @@ data class EarningsOrder(
     val fare: Int?,
     val distance: Double?,
     val duration: Double?,  // 小時
-    val completedAt: Long?
+    val completedAt: String? = null  // ISO 8601 格式
 )
 
 /**

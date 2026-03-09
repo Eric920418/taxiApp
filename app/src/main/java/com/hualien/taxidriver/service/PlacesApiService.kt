@@ -73,7 +73,8 @@ class PlacesApiService(context: Context) {
             val requestBuilder = FindAutocompletePredictionsRequest.builder()
                 .setSessionToken(sessionToken)
                 .setQuery(query)
-                .setLocationBias(HUALIEN_BOUNDS)  // 限制在花蓮範圍
+                .setCountries(listOf("TW"))  // 限制在台灣
+                .setLocationRestriction(HUALIEN_BOUNDS)  // 嚴格限制在花蓮範圍（不只是偏好）
 
             // 如果有提供偏好位置，優先顯示附近結果
             bias?.let {

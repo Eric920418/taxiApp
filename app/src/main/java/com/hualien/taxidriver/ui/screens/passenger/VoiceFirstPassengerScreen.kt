@@ -34,14 +34,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.hualien.taxidriver.data.remote.dto.VoiceChatState
 import com.hualien.taxidriver.service.VoiceRecorderService
-import com.hualien.taxidriver.ui.components.CharacterState
 import com.hualien.taxidriver.ui.components.PickupMapSelector
+import com.hualien.taxidriver.ui.components.VoiceChatPanel
 import com.hualien.taxidriver.ui.components.VoiceWaveIndicator
-import com.hualien.taxidriver.ui.components.XiaoJuCharacter
 import com.hualien.taxidriver.ui.theme.*
 import com.hualien.taxidriver.viewmodel.OrderStatus
 import com.hualien.taxidriver.viewmodel.PassengerViewModel
@@ -54,9 +55,8 @@ import kotlinx.coroutines.launch
  * 語音優先乘客介面
  *
  * 設計理念：
- * - 以「小橘」角色為中心的對話式介面
  * - 語音為主要互動方式，觸控為備選
- * - 打破傳統表單式 UI，強調情感連結
+ * - 簡潔清晰的狀態顯示
  * - 適合老年人使用：大字體、高對比、簡化流程
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,6 +72,14 @@ fun VoiceFirstPassengerScreen(
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     val scope = rememberCoroutineScope()
+
+    // 語音對講狀態
+    val voiceChatHistory by viewModel.voiceChatHistory.collectAsState()
+    val voiceChatState by viewModel.voiceChatState.collectAsState()
+    val isVoiceChatRecording by viewModel.voiceChatRecording.collectAsState()
+    val voiceChatAmplitude by viewModel.voiceChatAmplitude.collectAsState()
+    val showVoiceChatPanel by viewModel.showVoiceChatPanel.collectAsState()
+    val voiceChatUnreadCount by viewModel.voiceChatUnreadCount.collectAsState()
 
     // 權限處理
     var hasRecordPermission by remember { mutableStateOf(false) }
@@ -100,12 +108,18 @@ fun VoiceFirstPassengerScreen(
         mutableStateOf(!sharedPrefs.getBoolean("has_seen_guide", false))
     }
 
-    // 檢查靜音並顯示提示（只在小橘說話時顯示，說完後自動隱藏）
+    // 訂單完成對話框狀態
+    var showCompletedDialog by remember { mutableStateOf(false) }
+    var completedOrder by remember { mutableStateOf<com.hualien.taxidriver.domain.model.Order?>(null) }
+    var showRatingDialog by remember { mutableStateOf(false) }
+    var ratingSubmitted by remember { mutableStateOf(false) }
+
+    // 檢查靜音並顯示提示（語音播放時顯示，播完後自動隱藏）
     LaunchedEffect(uiState.isSpeaking, isMuted) {
         if (uiState.isSpeaking && isMuted) {
             showMuteWarning = true
         } else if (!uiState.isSpeaking) {
-            // 小橘說完話後，延遲一點再隱藏
+            // 語音播完後，延遲一點再隱藏
             kotlinx.coroutines.delay(2000)
             showMuteWarning = false
         }
@@ -124,42 +138,59 @@ fun VoiceFirstPassengerScreen(
         )
 
         viewModel.setPassengerId(passengerId)
-        viewModel.connectWebSocket(passengerId)
+        viewModel.connectWebSocket(passengerId) { hasActiveOrder ->
+            // 只有在「確認沒有進行中訂單」時才播放歡迎語，避免重開 app 後狀態互撞
+            if (hasActiveOrder == false) {
+                viewModel.playWelcomeGreeting()
+            } else {
+                android.util.Log.d("VoiceFirstScreen", "跳過歡迎語：hasActiveOrder=$hasActiveOrder")
+            }
+        }
         viewModel.startLocationUpdates()
         viewModel.updateNearbyDrivers()
     }
 
-    // 計算角色狀態
-    val characterState = when {
-        uiState.voiceRecordingStatus == VoiceRecordingStatus.RECORDING -> CharacterState.LISTENING
-        uiState.voiceRecordingStatus == VoiceRecordingStatus.PROCESSING -> CharacterState.THINKING
-        uiState.voiceAutoflowState == VoiceAutoflowState.SEARCHING_DESTINATION -> CharacterState.THINKING
-        uiState.voiceAutoflowState == VoiceAutoflowState.CONFIRMING_DESTINATION -> CharacterState.SPEAKING
-        uiState.orderStatus == OrderStatus.WAITING -> CharacterState.WAITING
-        uiState.orderStatus == OrderStatus.ACCEPTED -> CharacterState.HAPPY
-        uiState.orderStatus in listOf(OrderStatus.ARRIVED, OrderStatus.ON_TRIP) -> CharacterState.HAPPY
-        uiState.orderStatus == OrderStatus.COMPLETED -> CharacterState.HAPPY
-        uiState.orderStatus == OrderStatus.CANCELLED -> CharacterState.SAD
-        uiState.error != null -> CharacterState.SAD
-        else -> CharacterState.IDLE
+    // 監聽訂單完成狀態
+    LaunchedEffect(uiState.orderStatus) {
+        if (uiState.orderStatus == OrderStatus.COMPLETED && !ratingSubmitted && !showCompletedDialog) {
+            uiState.currentOrder?.let { order ->
+                android.util.Log.d("VoiceFirstScreen", "訂單完成，顯示評價對話框: ${order.orderId}")
+                completedOrder = order
+                showCompletedDialog = true
+            }
+        }
     }
 
-    // 計算角色訊息（優先顯示對話泡泡內容）
-    val characterMessage = when {
-        // 如果小橘正在說話，優先顯示對話泡泡
+    // 狀態訊息
+    val statusMessage = when {
+        // 優先顯示語音回覆
         uiState.currentSpeechText != null -> uiState.currentSpeechText
         uiState.voiceRecordingStatus == VoiceRecordingStatus.RECORDING -> "我在聽..."
         uiState.voiceRecordingStatus == VoiceRecordingStatus.PROCESSING -> "讓我想想..."
+        // 錯誤訊息優先級提高，讓用戶能看到錯誤
+        uiState.error != null -> "抱歉，${uiState.error}"
         uiState.voiceAutoflowState == VoiceAutoflowState.SEARCHING_DESTINATION -> "正在幫您找地點..."
-        uiState.voiceAutoflowState == VoiceAutoflowState.CONFIRMING_DESTINATION ->
-            "您是要去「${uiState.pendingDestinationDetails?.name ?: "這裡"}」嗎？"
+        uiState.voiceAutoflowState == VoiceAutoflowState.ASKING_TRAIN_TIME -> "趕火車是幾點的？"
+        uiState.voiceAutoflowState == VoiceAutoflowState.CONFIRMING_DESTINATION -> {
+            val destName = uiState.pendingDestinationDetails?.name ?: "這裡"
+            val fareInfo = uiState.fareEstimate?.let { fare ->
+                val distanceKm = String.format("%.1f", fare.distanceKm)
+                if (fare.isNightTime) {
+                    "\n距離約 $distanceKm 公里\n預估車資 ${fare.totalFare} 元（含夜間加成）"
+                } else {
+                    "\n距離約 $distanceKm 公里\n預估車資 ${fare.totalFare} 元"
+                }
+            } ?: ""
+            "您是要去「$destName」嗎？$fareInfo"
+        }
+        uiState.voiceAutoflowState == VoiceAutoflowState.BOOKING ||
+        uiState.orderStatus == OrderStatus.REQUESTING -> "正在為您叫車..."
         uiState.orderStatus == OrderStatus.WAITING -> "正在為您找司機..."
         uiState.orderStatus == OrderStatus.ACCEPTED ->
             "${uiState.currentOrder?.driverName ?: "司機"}已接單！\n正在前往中"
         uiState.orderStatus == OrderStatus.ARRIVED -> "司機已到達上車點！"
         uiState.orderStatus == OrderStatus.ON_TRIP -> "正在前往目的地..."
         uiState.orderStatus == OrderStatus.COMPLETED -> "到達目的地啦！\n感謝您的搭乘"
-        uiState.error != null -> "抱歉，${uiState.error}"
         uiState.currentOrder == null -> "您好！\n說出您想去的地方吧"
         else -> null
     }
@@ -201,15 +232,50 @@ fun VoiceFirstPassengerScreen(
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(horizontal = 32.dp)
                     ) {
-                        // 小橘角色
-                        XiaoJuCharacter(
-                            state = characterState,
-                            size = 220.dp,
-                            message = characterMessage,
-                            amplitude = uiState.voiceAmplitude
+                        // 狀態圖示
+                        val statusIcon = when {
+                            uiState.voiceRecordingStatus == VoiceRecordingStatus.RECORDING -> Icons.Default.Mic
+                            uiState.voiceRecordingStatus == VoiceRecordingStatus.PROCESSING -> Icons.Default.HourglassTop
+                            uiState.voiceAutoflowState == VoiceAutoflowState.SEARCHING_DESTINATION -> Icons.Default.Search
+                            uiState.voiceAutoflowState == VoiceAutoflowState.ASKING_TRAIN_TIME -> Icons.Default.Train
+                            uiState.voiceAutoflowState == VoiceAutoflowState.BOOKING ||
+                            uiState.orderStatus == OrderStatus.REQUESTING -> Icons.Default.HourglassTop
+                            uiState.orderStatus == OrderStatus.WAITING -> Icons.Default.LocalTaxi
+                            uiState.orderStatus == OrderStatus.ACCEPTED -> Icons.Default.CheckCircle
+                            uiState.orderStatus in listOf(OrderStatus.ARRIVED, OrderStatus.ON_TRIP) -> Icons.Default.DirectionsCar
+                            uiState.orderStatus == OrderStatus.COMPLETED -> Icons.Default.Done
+                            uiState.error != null -> Icons.Default.Error
+                            else -> Icons.Default.RecordVoiceOver
+                        }
+
+                        val iconColor = when {
+                            uiState.voiceRecordingStatus == VoiceRecordingStatus.RECORDING -> HappyYellow
+                            uiState.error != null -> SoftRed
+                            uiState.orderStatus == OrderStatus.ACCEPTED -> SoftGreen
+                            uiState.orderStatus == OrderStatus.COMPLETED -> SoftGreen
+                            else -> WarmCoral
+                        }
+
+                        // 圖示（帶動畫）
+                        val iconScale by animateFloatAsState(
+                            targetValue = if (uiState.voiceRecordingStatus == VoiceRecordingStatus.RECORDING) 1.2f else 1f,
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                            label = "iconScale"
                         )
+
+                        Icon(
+                            imageVector = statusIcon,
+                            contentDescription = null,
+                            tint = iconColor,
+                            modifier = Modifier
+                                .size(80.dp)
+                                .scale(iconScale)
+                        )
+
+                        Spacer(modifier = Modifier.height(24.dp))
 
                         // 語音波形（錄音時顯示）
                         AnimatedVisibility(
@@ -220,23 +286,45 @@ fun VoiceFirstPassengerScreen(
                             VoiceWaveIndicator(
                                 amplitude = uiState.voiceAmplitude,
                                 modifier = Modifier
-                                    .padding(top = 24.dp)
+                                    .padding(bottom = 16.dp)
                                     .width(150.dp),
                                 color = HappyYellow
                             )
                         }
 
+                        // 狀態文字
+                        statusMessage?.let { message ->
+                            Text(
+                                text = message,
+                                style = WarmTypography.headlineLarge,  // 改小字體避免爆版
+                                color = WarmBrown,
+                                textAlign = TextAlign.Center,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 4,  // 限制行數
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp)
+                            )
+                        }
+
                         // 訂單資訊卡片（有訂單時顯示）
+                        val showOrderCard = uiState.currentOrder != null &&
+                                uiState.orderStatus !in listOf(OrderStatus.IDLE, OrderStatus.COMPLETED, OrderStatus.CANCELLED)
+                        android.util.Log.d("VoiceFirstScreen", "訂單卡片: 顯示=$showOrderCard, 訂單=${uiState.currentOrder?.orderId}, 狀態=${uiState.orderStatus}")
+
                         AnimatedVisibility(
-                            visible = uiState.currentOrder != null &&
-                                    uiState.orderStatus !in listOf(OrderStatus.IDLE, OrderStatus.COMPLETED, OrderStatus.CANCELLED),
+                            visible = showOrderCard,
                             enter = fadeIn() + slideInVertically(),
                             exit = fadeOut() + slideOutVertically()
                         ) {
                             OrderInfoCard(
                                 order = uiState.currentOrder,
                                 orderStatus = uiState.orderStatus,
-                                onCancelClick = { viewModel.cancelOrder(passengerId) },
+                                onCancelClick = {
+                                    android.util.Log.d("VoiceFirstScreen", "========== onCancelClick 被調用 ==========")
+                                    android.util.Log.d("VoiceFirstScreen", "passengerId: $passengerId")
+                                    viewModel.cancelOrder(passengerId)
+                                },
                                 onCallDriver = { phoneNumber ->
                                     // 撥打電話
                                     val intent = Intent(Intent.ACTION_DIAL).apply {
@@ -244,6 +332,11 @@ fun VoiceFirstPassengerScreen(
                                     }
                                     context.startActivity(intent)
                                 },
+                                // 語音對講
+                                canUseVoiceChat = viewModel.canUseVoiceChat(),
+                                voiceChatUnreadCount = voiceChatUnreadCount,
+                                onVoiceChatClick = { viewModel.showVoiceChatPanel() },
+                                isLoading = uiState.isLoading,
                                 modifier = Modifier.padding(top = 24.dp, start = 24.dp, end = 24.dp)
                             )
                         }
@@ -320,7 +413,7 @@ fun VoiceFirstPassengerScreen(
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
-                                text = "請開啟聲音，\n小橘才能和您說話喔！",
+                                text = "請開啟聲音\n才能聽到語音回覆",
                                 style = WarmTypography.bodyLarge,
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold
@@ -334,6 +427,22 @@ fun VoiceFirstPassengerScreen(
                         )
                     }
                 }
+            }
+
+            // 語音對講面板
+            if (showVoiceChatPanel) {
+                VoiceChatPanel(
+                    messages = voiceChatHistory,
+                    currentUserId = passengerId,
+                    isRecording = isVoiceChatRecording,
+                    state = voiceChatState,
+                    amplitude = voiceChatAmplitude,
+                    onStartRecording = { viewModel.startVoiceChatRecording() },
+                    onStopRecording = { viewModel.stopVoiceChatRecording() },
+                    onClose = { viewModel.hideVoiceChatPanel() },
+                    enabled = viewModel.canUseVoiceChat(),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
             }
 
             // 首次使用引導
@@ -403,6 +512,124 @@ fun VoiceFirstPassengerScreen(
                 }
             }
         }
+    }
+
+    // 訂單完成對話框（簡化版，適合語音模式）
+    if (showCompletedDialog && completedOrder != null) {
+        AlertDialog(
+            onDismissRequest = { /* 不允許點擊外部關閉 */ },
+            title = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Done,
+                        contentDescription = null,
+                        tint = SoftGreen,
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "行程已完成",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // 車資信息
+                    completedOrder?.fare?.let { fare ->
+                        Text(
+                            "車資 NT$ ${fare.meterAmount}",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = SoftGreen
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+
+                    Text(
+                        "感謝您的搭乘！",
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            },
+            confirmButton = {
+                // 評價司機按鈕
+                if (!ratingSubmitted && completedOrder?.driverId != null) {
+                    Button(
+                        onClick = { showRatingDialog = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = WarmCoral
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("評價司機", fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showCompletedDialog = false
+                        completedOrder = null
+                        ratingSubmitted = false
+                        viewModel.clearOrder()
+                    }
+                ) {
+                    Text(if (ratingSubmitted) "繼續叫車" else "稍後評價")
+                }
+            }
+        )
+    }
+
+    // 司機評價對話框
+    if (showRatingDialog && completedOrder != null) {
+        // 保存訂單資訊（避免在回調中使用可能已被清空的 completedOrder）
+        val orderIdToRate = completedOrder?.orderId ?: ""
+        val driverIdToRate = completedOrder?.driverId ?: ""
+        val driverNameToRate = completedOrder?.driverName ?: "司機"
+
+        com.hualien.taxidriver.ui.components.RatingDialog(
+            title = "評價司機",
+            targetName = driverNameToRate,
+            isDriver = true,
+            onDismiss = { showRatingDialog = false },
+            onSubmit = { rating, comment ->
+                viewModel.submitDriverRating(
+                    passengerId = passengerId,
+                    orderId = orderIdToRate,
+                    driverId = driverIdToRate,
+                    rating = rating,
+                    comment = comment,
+                    onSuccess = {
+                        android.util.Log.d("VoiceFirstScreen", "評價成功，關閉所有對話框")
+                        // 重要：先設置本地狀態（同步），再清除 ViewModel 訂單
+                        // 這樣即使 clearOrder() 觸發重組，本地狀態已經是正確的
+                        ratingSubmitted = true
+                        showRatingDialog = false
+                        showCompletedDialog = false
+                        completedOrder = null
+                        viewModel.clearOrder()
+                    },
+                    onError = { errorMessage ->
+                        android.util.Log.e("VoiceFirstScreen", "評價失敗: $errorMessage")
+                        showRatingDialog = false
+                    }
+                )
+            }
+        )
     }
 
     // 清理資源
@@ -517,6 +744,22 @@ private fun BottomActionArea(
                 ConfirmationButtons(
                     onConfirm = onConfirmDestination,
                     onReject = onRejectDestination
+                )
+            }
+
+            // 正在叫車（BOOKING 狀態）
+            voiceAutoflowState == VoiceAutoflowState.BOOKING -> {
+                // 叫車中不顯示語音按鈕，顯示載入提示
+                CircularProgressIndicator(
+                    modifier = Modifier.size(48.dp),
+                    color = WarmCoral,
+                    strokeWidth = 4.dp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "正在為您叫車...",
+                    style = WarmTypography.bodyLarge,
+                    color = WarmBrown
                 )
             }
 
@@ -698,7 +941,7 @@ private fun ConfirmationButtons(
         // 拒絕按鈕
         LargeActionButton(
             icon = Icons.Default.Close,
-            label = "不對",
+            label = "算了",
             containerColor = Color.White,
             contentColor = SoftRed,
             onClick = onReject
@@ -707,7 +950,7 @@ private fun ConfirmationButtons(
         // 確認按鈕
         LargeActionButton(
             icon = Icons.Default.Check,
-            label = "對",
+            label = "好",
             containerColor = SoftGreen,
             contentColor = Color.White,
             onClick = onConfirm
@@ -797,6 +1040,10 @@ private fun OrderInfoCard(
     orderStatus: OrderStatus,
     onCancelClick: () -> Unit,
     onCallDriver: (String) -> Unit,
+    canUseVoiceChat: Boolean = false,
+    voiceChatUnreadCount: Int = 0,
+    onVoiceChatClick: () -> Unit = {},
+    isLoading: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     order ?: return
@@ -815,6 +1062,7 @@ private fun OrderInfoCard(
         ) {
             // 司機資訊（已接單後顯示）
             if (orderStatus != OrderStatus.WAITING && order.driverName != null) {
+                // 司機名字和頭像
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -822,7 +1070,7 @@ private fun OrderInfoCard(
                     // 司機頭像
                     Box(
                         modifier = Modifier
-                            .size(56.dp)
+                            .size(48.dp)
                             .clip(CircleShape)
                             .background(WarmCoral.copy(alpha = 0.2f)),
                         contentAlignment = Alignment.Center
@@ -831,40 +1079,74 @@ private fun OrderInfoCard(
                             imageVector = Icons.Default.Person,
                             contentDescription = null,
                             tint = WarmCoral,
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(28.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(16.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
 
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = order.driverName,
-                            style = WarmTypography.headlineLarge.copy(fontSize = 22.sp),
-                            color = WarmBrown
-                        )
-                        order.driverPhone?.let { phone ->
-                            Text(
-                                text = phone,
-                                style = WarmTypography.bodyMedium,
-                                color = WarmBrownMuted
-                            )
+                    // 司機名字
+                    Text(
+                        text = order.driverName,
+                        style = WarmTypography.headlineLarge,
+                        color = WarmBrown,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    // 操作按鈕區（對講 + 撥號）
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // 語音對講按鈕
+                        if (canUseVoiceChat) {
+                            IconButton(
+                                onClick = onVoiceChatClick,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .background(
+                                        if (voiceChatUnreadCount > 0) WarmCoral else WarmBrown.copy(alpha = 0.8f),
+                                        CircleShape
+                                    )
+                            ) {
+                                Box {
+                                    Icon(
+                                        imageVector = Icons.Default.Mic,
+                                        contentDescription = "語音對講",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    // 未讀標記
+                                    if (voiceChatUnreadCount > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .align(Alignment.TopEnd)
+                                                .offset(x = 2.dp, y = (-2).dp)
+                                                .clip(CircleShape)
+                                                .background(Color.Red)
+                                        )
+                                    }
+                                }
+                            }
                         }
-                    }
 
-                    // 撥打電話按鈕
-                    order.driverPhone?.let { phone ->
-                        IconButton(
-                            onClick = { onCallDriver(phone) },
-                            modifier = Modifier
-                                .size(48.dp)
-                                .background(SoftGreen, CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Phone,
-                                contentDescription = "撥打電話",
-                                tint = Color.White
-                            )
+                        // 撥打電話按鈕
+                        order.driverPhone?.let { phone ->
+                            IconButton(
+                                onClick = { onCallDriver(phone) },
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .background(SoftGreen, CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = "撥打電話",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -896,7 +1178,9 @@ private fun OrderInfoCard(
                             Text(
                                 text = pickup.address ?: "未知地址",
                                 style = WarmTypography.bodyMedium,
-                                color = WarmBrown
+                                color = WarmBrown,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -921,7 +1205,9 @@ private fun OrderInfoCard(
                             Text(
                                 text = dest.address ?: "未知地址",
                                 style = WarmTypography.bodyMedium,
-                                color = WarmBrown
+                                color = WarmBrown,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -929,17 +1215,42 @@ private fun OrderInfoCard(
             }
 
             // 取消按鈕（等待接單時顯示）
+            android.util.Log.d("OrderInfoCard", "當前訂單狀態: $orderStatus, 是否顯示取消按鈕: ${orderStatus == OrderStatus.WAITING}, isLoading: $isLoading")
             if (orderStatus == OrderStatus.WAITING) {
                 Spacer(modifier = Modifier.height(16.dp))
-                TextButton(
-                    onClick = onCancelClick,
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text(
-                        text = "取消叫車",
-                        style = WarmTypography.bodyMedium,
-                        color = SoftRed
+                Button(
+                    onClick = {
+                        if (!isLoading) {
+                            android.util.Log.d("OrderInfoCard", "========== 取消按鈕被點擊 ==========")
+                            onCancelClick()
+                        }
+                    },
+                    enabled = !isLoading,
+                    modifier = Modifier.align(Alignment.End),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SoftRed.copy(alpha = 0.1f),
+                        contentColor = SoftRed,
+                        disabledContainerColor = Color.Gray.copy(alpha = 0.1f),
+                        disabledContentColor = Color.Gray
                     )
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = SoftRed,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "取消中...",
+                            style = WarmTypography.bodyMedium
+                        )
+                    } else {
+                        Text(
+                            text = "取消叫車",
+                            style = WarmTypography.bodyMedium
+                        )
+                    }
                 }
             }
         }

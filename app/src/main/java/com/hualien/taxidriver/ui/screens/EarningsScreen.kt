@@ -299,8 +299,19 @@ fun StatItem(
  */
 @Composable
 fun TodayOrderCard(order: EarningsOrder) {
-    val dateFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-    val timeStr = order.completedAt?.let { dateFormat.format(Date(it)) } ?: "--:--"
+    val isoFormat = remember {
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+    }
+    val displayFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val timeStr = order.completedAt?.let { dateStr ->
+        try {
+            isoFormat.parse(dateStr)?.let { displayFormat.format(it) }
+        } catch (e: Exception) {
+            null
+        }
+    } ?: "--:--"
 
     Card(
         modifier = Modifier.fillMaxWidth(),

@@ -22,9 +22,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.google.firebase.auth.FirebaseAuth
 import com.hualien.taxidriver.BuildConfig
+import com.hualien.taxidriver.data.remote.WebSocketManager
 import com.hualien.taxidriver.service.FcmTokenManager
 import com.hualien.taxidriver.utils.DataStoreManager
+import com.hualien.taxidriver.utils.RoleManager
 import kotlinx.coroutines.launch
 
 /**
@@ -35,7 +38,10 @@ fun ProfileScreen(
     driverId: String,
     driverName: String,
     dataStoreManager: DataStoreManager,
-    onLogout: () -> Unit = {}
+    roleManager: RoleManager,
+    onLogout: () -> Unit = {},
+    onNavigateToAutoAccept: () -> Unit = {},
+    onNavigateToAccessibility: () -> Unit = {}
 ) {
     // 獲取司機的其他信息
     val driverPhone by dataStoreManager.driverPhone.collectAsState(initial = "")
@@ -105,7 +111,27 @@ fun ProfileScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Text(
-                text = "設定",
+                text = "功能設定",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+
+            SettingItem(
+                icon = Icons.Default.Star,
+                title = "AI 自動接單",
+                onClick = onNavigateToAutoAccept
+            )
+
+            SettingItem(
+                icon = Icons.Default.Settings,
+                title = "無障礙設定",
+                onClick = onNavigateToAccessibility
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "系統設定",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(vertical = 8.dp)
             )
@@ -194,10 +220,23 @@ fun ProfileScreen(
                 Button(
                     onClick = {
                         coroutineScope.launch {
-                            // 清除伺服器上的 FCM Token
+                            // 1. 取消 WebSocket 重連並斷開連接
+                            val webSocketManager = WebSocketManager.getInstance()
+                            webSocketManager.cancelReconnect()
+                            webSocketManager.disconnect()
+
+                            // 2. 清除伺服器上的 FCM Token
                             FcmTokenManager.clearTokenOnLogout(context, driverId)
-                            // 清除所有登錄數據
+
+                            // 3. 登出 Firebase Auth
+                            FirebaseAuth.getInstance().signOut()
+
+                            // 4. 清除所有登錄數據
                             dataStoreManager.clearLoginData()
+
+                            // 5. 清除 RoleManager 資料（回到角色選擇畫面）
+                            roleManager.logout()
+
                             // 調用登出回調
                             onLogout()
                         }

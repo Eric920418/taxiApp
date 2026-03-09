@@ -68,7 +68,7 @@ fun PassengerNavigation(
                             selected = selected,
                             onClick = {
                                 Log.d(TAG, "點擊底部導航: ${screen.title} (${screen.route})")
-                                // 如果點擊的是小橘（語音模式），直接返回起始頁面
+                                // 如果點擊的是語音模式，直接返回起始頁面
                                 if (screen.route == Screen.PassengerVoiceFirst.route) {
                                     // 清空返回堆疊，直接回到語音首頁
                                     navController.popBackStack(

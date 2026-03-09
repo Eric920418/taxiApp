@@ -39,6 +39,7 @@ class LocationService : Service() {
     private val webSocketManager = WebSocketManager.getInstance()
 
     private var driverId: String? = null
+    private var currentOrderId: String? = null  // 當前進行中的訂單ID，用於軌跡追蹤
     private var lastReportedLocation: Location? = null
     private var lastReportTime: Long = 0
     private var currentConfig: LocationConfig? = null
@@ -54,6 +55,7 @@ class LocationService : Service() {
 
         const val EXTRA_DRIVER_ID = "driver_id"
         const val EXTRA_DRIVER_STATUS = "driver_status"
+        const val EXTRA_ORDER_ID = "order_id"  // 訂單ID，用於軌跡追蹤
 
         // 位移過濾
         private const val MIN_DISPLACEMENT_METERS = 10f // 最小位移10米才更新
@@ -75,14 +77,15 @@ class LocationService : Service() {
 
                     // 檢查是否應該更新位置
                     if (shouldUpdateLocation(location, currentTime)) {
-                        // 透過WebSocket回報位置
+                        // 透過WebSocket回報位置（帶入訂單ID用於軌跡追蹤）
                         driverId?.let { id ->
                             webSocketManager.updateLocation(
                                 driverId = id,
                                 latitude = location.latitude,
                                 longitude = location.longitude,
                                 speed = location.speed,
-                                bearing = location.bearing
+                                bearing = location.bearing,
+                                orderId = currentOrderId  // 軌跡追蹤
                             )
                         }
 
@@ -120,10 +123,12 @@ class LocationService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         driverId = intent?.getStringExtra(EXTRA_DRIVER_ID)
         val statusString = intent?.getStringExtra(EXTRA_DRIVER_STATUS)
+        currentOrderId = intent?.getStringExtra(EXTRA_ORDER_ID)
 
         android.util.Log.d(TAG, "========== LocationService 啟動 ==========")
         android.util.Log.d(TAG, "司機ID: $driverId")
         android.util.Log.d(TAG, "司機狀態: $statusString")
+        android.util.Log.d(TAG, "訂單ID: $currentOrderId")
 
         // 更新電池優化管理器的司機狀態
         val driverStatus = statusString?.let {
@@ -151,6 +156,15 @@ class LocationService : Service() {
     fun updateDriverStatus(status: DriverAvailability) {
         android.util.Log.d(TAG, "更新司機狀態: $status")
         batteryOptimizationManager.updateDriverStatus(status)
+    }
+
+    /**
+     * 更新當前訂單ID（供外部調用，用於軌跡追蹤）
+     * @param orderId 訂單ID，傳 null 表示結束訂單
+     */
+    fun updateCurrentOrderId(orderId: String?) {
+        android.util.Log.d(TAG, "更新訂單ID: $orderId")
+        currentOrderId = orderId
     }
 
     private fun startLocationUpdates() {

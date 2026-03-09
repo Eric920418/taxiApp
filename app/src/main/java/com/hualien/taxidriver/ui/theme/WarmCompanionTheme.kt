@@ -5,10 +5,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 
 /**
@@ -166,6 +169,15 @@ object WarmTypography {
         letterSpacing = 0.sp
     )
 
+    // 標題（司機姓名等關鍵資訊）
+    val titleLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Bold,
+        fontSize = 26.sp,
+        lineHeight = 34.sp,
+        letterSpacing = 0.sp
+    )
+
     // 按鈕文字
     val labelLarge = TextStyle(
         fontFamily = FontFamily.Default,
@@ -237,6 +249,15 @@ object WarmDimensions {
 
 // ==================== 主題 Composable ====================
 
+/**
+ * 系統字體縮放上限
+ *
+ * WarmCompanionTheme 已針對老年人設計超大字體（40sp 等），
+ * 若再套用系統級的大字體設定會導致嚴重爆版。
+ * 因此限制 fontScale 最大為 1.0，確保 UI 佈局穩定。
+ */
+private const val MAX_FONT_SCALE = 1.0f
+
 @Composable
 fun WarmCompanionTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -248,8 +269,17 @@ fun WarmCompanionTheme(
         WarmLightColorScheme
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        content = content
+    // 限制系統字體縮放，防止老年機大字體設定導致 UI 爆版
+    val currentDensity = LocalDensity.current
+    val fontScaleLimited = Density(
+        density = currentDensity.density,
+        fontScale = minOf(currentDensity.fontScale, MAX_FONT_SCALE)
     )
+
+    CompositionLocalProvider(LocalDensity provides fontScaleLimited) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            content = content
+        )
+    }
 }

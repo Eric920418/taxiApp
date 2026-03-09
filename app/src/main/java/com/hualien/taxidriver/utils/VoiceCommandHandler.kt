@@ -363,10 +363,30 @@ class VoiceCommandHandler(
      * 播報訂單資訊
      */
     fun announceOrder(order: Order) {
+        announceOrderWithCallback(order, null)
+    }
+
+    /**
+     * 播報訂單資訊（帶回調）
+     * @param order 訂單資訊
+     * @param onComplete 播報完成後的回調
+     */
+    fun announceOrderWithCallback(order: Order, onComplete: (() -> Unit)?) {
         val pickup = order.pickup.address ?: "未知地點"
-        val destination = order.destination?.address ?: "未知目的地"
-        val message = "收到新訂單，從 $pickup 到 $destination。說「接」接受，說「不要」拒絕"
-        voiceAssistant.speak(message)
+        val destination = order.destination?.address ?: "未指定目的地"
+        val fare = order.estimatedFare
+
+        val message = buildString {
+            append("您有新訂單，從 $pickup 到 $destination")
+            fare?.let { append("，預估車資${it}元") }
+            append("。說「接」接單，說「不要」拒絕")
+        }
+
+        if (onComplete != null) {
+            voiceAssistant.speakWithCallback(message, VoiceAssistant.Priority.URGENT, onComplete)
+        } else {
+            voiceAssistant.speak(message, VoiceAssistant.Priority.URGENT)
+        }
     }
 
     /**

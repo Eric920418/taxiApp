@@ -30,7 +30,8 @@ class OrderRepository {
 
             if (response.isSuccessful && response.body() != null) {
                 val orderResponse = response.body()!!
-                Result.success(orderResponse.order)
+                // 將 OrderDto 轉換為 domain Order
+                Result.success(orderResponse.order.toDomainOrder())
             } else {
                 Result.failure(Exception("接單失敗：${response.message()}"))
             }
@@ -83,7 +84,8 @@ class OrderRepository {
             )
 
             if (response.isSuccessful && response.body() != null) {
-                Result.success(response.body()!!)
+                // 將 OrderDto 轉換為 domain Order
+                Result.success(response.body()!!.toDomainOrder())
             } else {
                 Result.failure(Exception("狀態更新失敗：${response.message()}"))
             }
@@ -98,22 +100,23 @@ class OrderRepository {
     suspend fun submitFare(
         orderId: String,
         meterAmount: Int,
-        appDistanceMeters: Int?,
-        appDurationSeconds: Int?
+        distanceKm: Double? = null,
+        durationMinutes: Int? = null
     ): Result<Order> {
         return try {
             val response = apiService.submitFare(
                 orderId = orderId,
                 request = com.hualien.taxidriver.data.remote.dto.SubmitFareRequest(
                     meterAmount = meterAmount,
-                    appDistanceMeters = appDistanceMeters ?: 0,
-                    appDurationSeconds = appDurationSeconds ?: 0,
+                    distance = distanceKm,
+                    duration = durationMinutes,
                     photoUrl = null // TODO: 未來實作拍照功能
                 )
             )
 
             if (response.isSuccessful && response.body() != null) {
-                Result.success(response.body()!!)
+                // 將 OrderDto 轉換為 domain Order
+                Result.success(response.body()!!.toDomainOrder())
             } else {
                 Result.failure(Exception("車資提交失敗：${response.message()}"))
             }
@@ -130,7 +133,9 @@ class OrderRepository {
             val response = apiService.getOrders(driverId = driverId)
 
             if (response.isSuccessful && response.body() != null) {
-                Result.success(response.body()!!.orders)
+                // 將 OrderDto 列表轉換為 domain Order 列表
+                val orders = response.body()!!.orders.map { it.toDomainOrder() }
+                Result.success(orders)
             } else {
                 Result.failure(Exception("取得訂單失敗"))
             }

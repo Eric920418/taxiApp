@@ -30,6 +30,7 @@ import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.ui.components.FareDialog
 import com.hualien.taxidriver.ui.components.RatingDialog
+import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
 
@@ -97,12 +98,8 @@ fun SeniorFriendlyHomeScreen(
         viewModel.updateDriverStatus(driverId, DriverAvailability.AVAILABLE)
     }
 
-    // 清理資源
-    DisposableEffect(Unit) {
-        onDispose {
-            viewModel.disconnectWebSocket()
-        }
-    }
+    // WebSocket 生命週期由 ViewModel.onCleared() 管理，不在 UI 層斷開
+    // 避免畫面切換/重組時誤觸發斷線
 
     // 根據司機狀態啟動/停止定位服務
     LaunchedEffect(uiState.driverStatus, hasLocationPermission) {
@@ -519,7 +516,7 @@ fun SeniorFriendlyOrderCard(
                                     color = Color(0xFFE65100)
                                 )
                                 Text(
-                                    text = "${distance} 公里",
+                                    text = distance.formatKilometers("公里", ""),
                                     fontSize = 32.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFFE65100)
@@ -544,7 +541,7 @@ fun SeniorFriendlyOrderCard(
                                     color = Color(0xFF1565C0)
                                 )
                                 Text(
-                                    text = "${distance} 公里",
+                                    text = distance.formatKilometers("公里", ""),
                                     fontSize = 32.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF1565C0)
@@ -556,6 +553,29 @@ fun SeniorFriendlyOrderCard(
                                         color = Color(0xFF0D47A1)
                                     )
                                 }
+                            }
+                        }
+
+                        // 預估車資（大字體，綠色強調）
+                        order.estimatedFare?.let { fare ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "💰 車資",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF2E7D32)
+                                )
+                                Text(
+                                    text = "$$fare",
+                                    fontSize = 36.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF4CAF50)
+                                )
+                                Text(
+                                    text = "預估",
+                                    fontSize = 22.sp,
+                                    color = Color(0xFF388E3C)
+                                )
                             }
                         }
                     }

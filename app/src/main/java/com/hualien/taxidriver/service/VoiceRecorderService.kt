@@ -19,12 +19,12 @@ class VoiceRecorderService(private val context: Context) {
     companion object {
         private const val TAG = "VoiceRecorderService"
 
-        // VAD 參數（已優化）
-        private const val SILENCE_THRESHOLD = 2000       // 靜音振幅閾值（提高以適應環境噪音）
-        private const val SILENCE_DURATION_MS = 1200L    // 靜音持續時間（縮短以更快響應）
-        private const val MAX_RECORDING_MS = 10000L      // 最長錄音時間（縮短）
-        private const val MIN_RECORDING_MS = 500L        // 最短錄音時間（避免誤觸發）
-        private const val AMPLITUDE_CHECK_INTERVAL_MS = 80L // 振幅檢測間隔（更頻繁）
+        // VAD 參數（針對司機語音接單優化）
+        private const val SILENCE_THRESHOLD = 1500       // 靜音振幅閾值（降低以更好偵測輕聲說話）
+        private const val SILENCE_DURATION_MS = 1500L    // 靜音持續時間（延長以給用戶更多時間）
+        private const val MAX_RECORDING_MS = 8000L       // 最長錄音時間（8秒，接單指令通常很短）
+        private const val MIN_RECORDING_MS = 300L        // 最短錄音時間（縮短，接單指令很短）
+        private const val AMPLITUDE_CHECK_INTERVAL_MS = 50L // 振幅檢測間隔（更頻繁以提高響應速度）
     }
 
     // 錄音狀態

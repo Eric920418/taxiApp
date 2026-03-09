@@ -52,42 +52,49 @@ class SmartOrderManager {
     }
 
     /**
-     * 一鍵執行下一步操作
-     * 根據當前狀態自動判斷下一步
+     * 獲取下一步操作（不改變狀態）
+     * 根據當前狀態自動判斷下一步該做什麼
+     * 注意：這個方法只返回動作類型，不會改變內部狀態
+     * 狀態改變由 confirmAction() 方法處理（在 API 成功後調用）
      */
-    fun executeNextAction(): NextAction {
+    fun getNextAction(): NextAction {
         return when (val state = _orderState.value) {
-            is SmartOrderState.WaitingForAccept -> {
-                acceptOrder()
-                NextAction.Accepted
-            }
+            is SmartOrderState.WaitingForAccept -> NextAction.Accepted
             is SmartOrderState.NavigatingToPickup -> {
-                if (state.nearPickup) {
-                    markArrived()
-                    NextAction.Arrived
-                } else {
-                    NextAction.NavigateToPickup
-                }
+                if (state.nearPickup) NextAction.Arrived else NextAction.NavigateToPickup
             }
-            is SmartOrderState.ArrivedAtPickup -> {
-                startTrip()
-                NextAction.TripStarted
-            }
+            is SmartOrderState.ArrivedAtPickup -> NextAction.TripStarted
             is SmartOrderState.OnTrip -> {
-                if (state.nearDestination) {
-                    endTrip()
-                    NextAction.TripEnded
-                } else {
-                    NextAction.ShowDestination
-                }
+                if (state.nearDestination) NextAction.TripEnded else NextAction.ShowDestination
             }
-            is SmartOrderState.WaitingForPayment -> {
-                NextAction.SubmitFare
-            }
-            SmartOrderState.NoOrder -> {
-                NextAction.NoAction
-            }
+            is SmartOrderState.WaitingForPayment -> NextAction.SubmitFare
+            SmartOrderState.NoOrder -> NextAction.NoAction
         }
+    }
+
+    /**
+     * 確認動作執行成功，更新本地狀態
+     * 應該在 API 調用成功後調用此方法
+     */
+    fun confirmAction(action: NextAction) {
+        when (action) {
+            NextAction.Accepted -> acceptOrder()
+            NextAction.Arrived -> markArrived()
+            NextAction.TripStarted -> startTrip()
+            NextAction.TripEnded -> endTrip()
+            else -> {} // 其他動作不需要更新狀態
+        }
+    }
+
+    /**
+     * 一鍵執行下一步操作（已棄用，保留向後兼容）
+     * @deprecated 使用 getNextAction() + confirmAction() 替代
+     */
+    @Deprecated("使用 getNextAction() + confirmAction() 替代，以確保 API 成功後才更新狀態")
+    fun executeNextAction(): NextAction {
+        val action = getNextAction()
+        // 注意：這裡不再直接改變狀態，狀態由 setOrder() 從 ViewModel 同步
+        return action
     }
 
     /**

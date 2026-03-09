@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +8,16 @@ plugins {
 
     // Google Services plugin
     id("com.google.gms.google-services")
+
+    // Firebase App Distribution plugin
+    id("com.google.firebase.appdistribution")
+}
+
+// 讀取 keystore.properties
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -15,14 +28,26 @@ android {
         applicationId = "com.hualien.taxidriver"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0-MVP"
+        versionCode = 5
+        versionName = "1.0.0-beta5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // BuildConfig設定
         buildConfigField("String", "SERVER_URL", "\"http://15.164.245.47/api/\"")
         buildConfigField("String", "WS_URL", "\"http://15.164.245.47\"")
+    }
+
+    // Signing 配置
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
     }
 
     buildTypes {
@@ -32,6 +57,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
+
+            // Firebase App Distribution 配置
+            firebaseAppDistribution {
+                artifactType = "APK"
+                releaseNotes = "Beta 測試版 - 歡迎回報問題！"
+                // 測試者群組（稍後在 Firebase Console 設定）
+                groups = "beta-testers"
+            }
         }
     }
     compileOptions {
