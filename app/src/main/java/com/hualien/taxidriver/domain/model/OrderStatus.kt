@@ -7,6 +7,7 @@ enum class OrderStatus {
     IDLE,        // 閒置
     WAITING,     // 等待中
     OFFERED,     // 已派單
+    QUEUED,      // 已預掛為下一單
     ACCEPTED,    // 已接單
     ARRIVED,     // 已到達
     ON_TRIP,     // 行程中
@@ -27,6 +28,7 @@ enum class OrderStatus {
         IDLE -> "閒置"
         WAITING -> "等待中"
         OFFERED -> "已派單"
+        QUEUED -> "下一單"
         ACCEPTED -> "已接單"
         ARRIVED -> "已到達"
         ON_TRIP -> "行程中"
@@ -42,6 +44,7 @@ enum class OrderStatus {
         IDLE -> androidx.compose.ui.graphics.Color(0xFF9E9E9E) // Gray
         WAITING -> androidx.compose.ui.graphics.Color(0xFFFF9800) // Orange
         OFFERED -> androidx.compose.ui.graphics.Color(0xFF2196F3) // Blue
+        QUEUED -> androidx.compose.ui.graphics.Color(0xFF5C6BC0) // Indigo
         ACCEPTED -> androidx.compose.ui.graphics.Color(0xFF4CAF50) // Green
         ARRIVED -> androidx.compose.ui.graphics.Color(0xFF9C27B0) // Purple
         ON_TRIP -> androidx.compose.ui.graphics.Color(0xFF00BCD4) // Cyan

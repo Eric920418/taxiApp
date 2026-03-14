@@ -45,6 +45,7 @@ data class PendingRating(
 data class HomeUiState(
     val driverStatus: DriverAvailability = DriverAvailability.OFFLINE,
     val currentOrder: Order? = null,
+    val queuedOrder: Order? = null,
     val isLoading: Boolean = false,
     val error: String? = null,
     // 評分相關
@@ -158,21 +159,29 @@ class HomeViewModel : ViewModel() {
                         return@collect
                     }
 
-                    // 如果已有進行中的訂單，不覆蓋（防止誤操作）
-                    val existingOrder = _uiState.value.currentOrder
-                    if (existingOrder != null &&
-                        existingOrder.status != OrderStatus.WAITING &&
-                        existingOrder.status != OrderStatus.OFFERED) {
-                        android.util.Log.w("HomeViewModel", "⚠️ 已有進行中訂單 ${existingOrder.orderId}，忽略新推送")
-                        return@collect
+                    if (order.isQueuedOrder()) {
+                        _uiState.value = _uiState.value.copy(
+                            queuedOrder = order,
+                            error = null
+                        )
+                        android.util.Log.d("HomeViewModel", "✅ 已更新下一單: ${order.orderId}")
+                    } else {
+                        // 如果已有進行中的主單，不覆蓋（防止誤操作）
+                        val existingOrder = _uiState.value.currentOrder
+                        if (existingOrder != null &&
+                            existingOrder.status != OrderStatus.WAITING &&
+                            existingOrder.status != OrderStatus.OFFERED) {
+                            android.util.Log.w("HomeViewModel", "⚠️ 已有進行中主單 ${existingOrder.orderId}，忽略新推送")
+                            return@collect
+                        }
+
+                        _uiState.value = _uiState.value.copy(
+                            currentOrder = order,
+                            error = null
+                        )
+
+                        android.util.Log.d("HomeViewModel", "✅ UI 狀態已更新，主單卡片應該顯示")
                     }
-
-                    _uiState.value = _uiState.value.copy(
-                        currentOrder = order,
-                        error = null
-                    )
-
-                    android.util.Log.d("HomeViewModel", "✅ UI 狀態已更新，訂單卡片應該顯示")
                 } else {
                     android.util.Log.d("HomeViewModel", "收到 null 訂單（可能是清除訂單）")
                 }
@@ -189,25 +198,47 @@ class HomeViewModel : ViewModel() {
                     android.util.Log.d("HomeViewModel", "新狀態: ${updatedOrder.status}")
 
                     val currentOrder = _uiState.value.currentOrder
+                    val queuedOrder = _uiState.value.queuedOrder
 
                     // 如果是當前訂單的狀態更新
                     if (currentOrder != null && currentOrder.orderId == updatedOrder.orderId) {
                         when (updatedOrder.status.name) {
                             "CANCELLED" -> {
-                                // 乘客取消訂單，清除當前訂單
-                                android.util.Log.d("HomeViewModel", "⚠️ 乘客已取消訂單，清除訂單卡片")
-                                _uiState.value = _uiState.value.copy(
-                                    currentOrder = null,
-                                    error = "乘客已取消訂單"
-                                )
-                                // 同時清除 WebSocket 的訂單 offer
-                                webSocketManager.clearOrderOffer()
+                                android.util.Log.d("HomeViewModel", "⚠️ 主單已取消，處理交接")
+                                handleCurrentOrderCleared("乘客已取消訂單")
                             }
+                            "DONE" -> handleCurrentOrderCleared(null)
                             else -> {
                                 // 其他狀態更新，更新當前訂單
                                 android.util.Log.d("HomeViewModel", "✅ 訂單狀態已更新")
                                 _uiState.value = _uiState.value.copy(
                                     currentOrder = updatedOrder,
+                                    error = null
+                                )
+                            }
+                        }
+                    } else if (queuedOrder != null && queuedOrder.orderId == updatedOrder.orderId) {
+                        when (updatedOrder.status) {
+                            OrderStatus.CANCELLED, OrderStatus.DONE -> {
+                                android.util.Log.d("HomeViewModel", "⚠️ 下一單已取消/結束，清除下一單")
+                                _uiState.value = _uiState.value.copy(
+                                    queuedOrder = null,
+                                    error = if (updatedOrder.status == OrderStatus.CANCELLED) "下一單已取消" else _uiState.value.error
+                                )
+                            }
+                            OrderStatus.ACCEPTED, OrderStatus.ARRIVED, OrderStatus.ON_TRIP, OrderStatus.SETTLING -> {
+                                android.util.Log.d("HomeViewModel", "✅ 下一單已升為主單")
+                                _uiState.value = _uiState.value.copy(
+                                    currentOrder = updatedOrder,
+                                    queuedOrder = null,
+                                    driverStatus = DriverAvailability.ON_TRIP,
+                                    error = null
+                                )
+                            }
+                            else -> {
+                                android.util.Log.d("HomeViewModel", "✅ 下一單狀態已更新")
+                                _uiState.value = _uiState.value.copy(
+                                    queuedOrder = updatedOrder,
                                     error = null
                                 )
                             }
@@ -329,7 +360,7 @@ class HomeViewModel : ViewModel() {
 
         // 【重要】連接前先清除舊訂單，防止殘留
         android.util.Log.d("HomeViewModel", "清除舊訂單狀態...")
-        _uiState.value = _uiState.value.copy(currentOrder = null)
+        _uiState.value = _uiState.value.copy(currentOrder = null, queuedOrder = null)
 
         isConnecting = true
         viewModelScope.launch {
@@ -359,8 +390,9 @@ class HomeViewModel : ViewModel() {
             android.util.Log.d("HomeViewModel", "司機ID: $driverId")
 
             try {
-                // 嘗試獲取各種進行中狀態的訂單
+                // 嘗試獲取各種進行中狀態的主單
                 val activeStatuses = listOf("ACCEPTED", "ARRIVED", "ON_TRIP", "SETTLING")
+                var activeOrder: Order? = null
 
                 for (status in activeStatuses) {
                     val response = RetrofitClient.apiService.getOrders(
@@ -371,20 +403,33 @@ class HomeViewModel : ViewModel() {
                     if (response.isSuccessful) {
                         val orderDtos = response.body()?.orders ?: emptyList()
                         if (orderDtos.isNotEmpty()) {
-                            // 將 OrderDto 轉換為 domain Order
-                            val activeOrder = orderDtos.first().toDomainOrder()
-                            android.util.Log.d("HomeViewModel", "✅ 找到活動訂單: ${activeOrder.orderId}, 狀態: ${activeOrder.status}")
-
-                            _uiState.value = _uiState.value.copy(
-                                currentOrder = activeOrder,
-                                driverStatus = DriverAvailability.ON_TRIP // 有訂單時設為載客中
-                            )
-                            return@launch
+                            activeOrder = orderDtos.first().toDomainOrder()
+                            android.util.Log.d("HomeViewModel", "✅ 找到活動主單: ${activeOrder.orderId}, 狀態: ${activeOrder.status}")
+                            break
                         }
                     }
                 }
 
-                android.util.Log.d("HomeViewModel", "📭 無活動訂單")
+                val queuedResponse = RetrofitClient.apiService.getOrders(
+                    driverId = driverId,
+                    status = OrderStatus.QUEUED.name
+                )
+                val queuedOrder = if (queuedResponse.isSuccessful) {
+                    queuedResponse.body()?.orders?.firstOrNull()?.toDomainOrder()
+                } else {
+                    null
+                }
+
+                if (activeOrder != null || queuedOrder != null) {
+                    _uiState.value = _uiState.value.copy(
+                        currentOrder = activeOrder,
+                        queuedOrder = queuedOrder,
+                        driverStatus = if (activeOrder != null || queuedOrder != null) DriverAvailability.ON_TRIP else _uiState.value.driverStatus
+                    )
+                    return@launch
+                }
+
+                android.util.Log.d("HomeViewModel", "📭 無活動訂單與下一單")
             } catch (e: Exception) {
                 android.util.Log.e("HomeViewModel", "❌ 獲取活動訂單失敗: ${e.message}", e)
             }
@@ -497,18 +542,28 @@ class HomeViewModel : ViewModel() {
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
+            val pendingQueuedOrder = _uiState.value.queuedOrder?.takeIf { it.orderId == orderId }
 
             repository.acceptOrder(orderId, driverId, driverName)
                 .onSuccess { order ->
                     android.util.Log.d("HomeViewModel", "✅ 接單成功")
                     android.util.Log.d("HomeViewModel", "訂單狀態: ${order.status}")
 
-                    _uiState.value = _uiState.value.copy(
-                        currentOrder = order,
-                        driverStatus = DriverAvailability.ON_TRIP,
-                        isLoading = false,
-                        error = null
-                    )
+                    if (pendingQueuedOrder != null || order.isQueuedOrder()) {
+                        _uiState.value = _uiState.value.copy(
+                            queuedOrder = mergeQueuedOrderMetadata(order, pendingQueuedOrder),
+                            driverStatus = DriverAvailability.ON_TRIP,
+                            isLoading = false,
+                            error = null
+                        )
+                    } else {
+                        _uiState.value = _uiState.value.copy(
+                            currentOrder = order,
+                            driverStatus = DriverAvailability.ON_TRIP,
+                            isLoading = false,
+                            error = null
+                        )
+                    }
                 }
                 .onFailure { error ->
                     android.util.Log.e("HomeViewModel", "❌ 接單失敗: ${error.message}")
@@ -528,14 +583,19 @@ class HomeViewModel : ViewModel() {
         voiceAssistant?.stop()
         clearVoiceOrderState()
 
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+        // 立即清除訂單（樂觀更新），防止 Whisper 非同步回調中
+        // currentOrder?.status == OFFERED 仍為 true，導致語音循環重啟
+        val isQueuedReject = _uiState.value.queuedOrder?.orderId == orderId
+        _uiState.value = _uiState.value.copy(
+            currentOrder = if (isQueuedReject) _uiState.value.currentOrder else null,
+            queuedOrder = if (isQueuedReject) null else _uiState.value.queuedOrder,
+            isLoading = true
+        )
 
+        viewModelScope.launch {
             repository.rejectOrder(orderId, driverId, reason)
                 .onSuccess {
-                    // 清除當前訂單
                     _uiState.value = _uiState.value.copy(
-                        currentOrder = null,
                         isLoading = false,
                         error = null
                     )
@@ -576,14 +636,23 @@ class HomeViewModel : ViewModel() {
     private fun updateOrderStatus(orderId: String, newStatus: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
+            val isQueuedUpdate = _uiState.value.queuedOrder?.orderId == orderId
 
             repository.updateOrderStatus(orderId, newStatus)
                 .onSuccess { updatedOrder ->
-                    _uiState.value = _uiState.value.copy(
-                        currentOrder = updatedOrder,
-                        isLoading = false,
-                        error = null
-                    )
+                    _uiState.value = if (isQueuedUpdate || updatedOrder.isQueuedOrder()) {
+                        _uiState.value.copy(
+                            queuedOrder = updatedOrder,
+                            isLoading = false,
+                            error = null
+                        )
+                    } else {
+                        _uiState.value.copy(
+                            currentOrder = updatedOrder,
+                            isLoading = false,
+                            error = null
+                        )
+                    }
                 }
                 .onFailure { error ->
                     _uiState.value = _uiState.value.copy(
@@ -637,7 +706,8 @@ class HomeViewModel : ViewModel() {
                     // 同時設置待評分訂單
                     _uiState.value = _uiState.value.copy(
                         currentOrder = null,
-                        driverStatus = DriverAvailability.AVAILABLE,
+                        queuedOrder = _uiState.value.queuedOrder,
+                        driverStatus = if (_uiState.value.queuedOrder != null) DriverAvailability.ON_TRIP else DriverAvailability.AVAILABLE,
                         isLoading = false,
                         error = null,
                         pendingRating = PendingRating(
@@ -647,15 +717,21 @@ class HomeViewModel : ViewModel() {
                         )
                     )
 
+                    if (_uiState.value.queuedOrder != null) {
+                        promoteQueuedOrderToCurrent("主單完成，自動切換到下一單")
+                    }
+
                     // 同步更新server端的司機狀態
-                    android.util.Log.d("HomeViewModel", "正在將司機狀態恢復為可接單...")
-                    repository.updateDriverStatus(driverId, DriverAvailability.AVAILABLE)
-                        .onSuccess {
-                            android.util.Log.d("HomeViewModel", "✅ 司機狀態已恢復為可接單")
-                        }
-                        .onFailure { error ->
-                            android.util.Log.e("HomeViewModel", "⚠️ 狀態恢復失敗: ${error.message}")
-                        }
+                    if (_uiState.value.currentOrder == null) {
+                        android.util.Log.d("HomeViewModel", "正在將司機狀態恢復為可接單...")
+                        repository.updateDriverStatus(driverId, DriverAvailability.AVAILABLE)
+                            .onSuccess {
+                                android.util.Log.d("HomeViewModel", "✅ 司機狀態已恢復為可接單")
+                            }
+                            .onFailure { error ->
+                                android.util.Log.e("HomeViewModel", "⚠️ 狀態恢復失敗: ${error.message}")
+                            }
+                    }
 
                     // 刷新今日統計
                     loadTodayStats(driverId)
@@ -731,6 +807,39 @@ class HomeViewModel : ViewModel() {
      */
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    private fun mergeQueuedOrderMetadata(updatedOrder: Order, originalOrder: Order?): Order {
+        return updatedOrder.copy(
+            statusString = if (updatedOrder.status == OrderStatus.ACCEPTED) OrderStatus.QUEUED.name else updatedOrder.statusString,
+            queuePosition = updatedOrder.queuePosition ?: originalOrder?.queuePosition ?: 2,
+            queuedAfterOrderId = updatedOrder.queuedAfterOrderId ?: originalOrder?.queuedAfterOrderId ?: _uiState.value.currentOrder?.orderId,
+            predictedHandoverAt = updatedOrder.predictedHandoverAt ?: originalOrder?.predictedHandoverAt,
+            assignmentMode = updatedOrder.assignmentMode ?: originalOrder?.assignmentMode ?: "STACKED_1P1"
+        )
+    }
+
+    private fun handleCurrentOrderCleared(message: String?) {
+        webSocketManager.clearOrderOffer()
+        if (_uiState.value.queuedOrder != null) {
+            promoteQueuedOrderToCurrent(message)
+        } else {
+            _uiState.value = _uiState.value.copy(
+                currentOrder = null,
+                driverStatus = DriverAvailability.AVAILABLE,
+                error = message
+            )
+        }
+    }
+
+    private fun promoteQueuedOrderToCurrent(message: String?) {
+        val queuedOrder = _uiState.value.queuedOrder ?: return
+        _uiState.value = _uiState.value.copy(
+            currentOrder = queuedOrder.promoteQueuedToCurrent(),
+            queuedOrder = null,
+            driverStatus = DriverAvailability.ON_TRIP,
+            error = message
+        )
     }
 
     // ==================== 今日統計相關 ====================

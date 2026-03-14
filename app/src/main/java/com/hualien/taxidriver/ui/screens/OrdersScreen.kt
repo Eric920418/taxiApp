@@ -181,6 +181,7 @@ fun DriverOrderCard(order: Order) {
         OrderStatus.IDLE -> "閒置"
         OrderStatus.WAITING -> "等待中"
         OrderStatus.OFFERED -> "派單中"
+        OrderStatus.QUEUED -> "下一單"
         OrderStatus.ACCEPTED -> "已接單"
         OrderStatus.ARRIVED -> "已到達"
         OrderStatus.ON_TRIP -> "行程中"

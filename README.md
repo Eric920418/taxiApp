@@ -336,6 +336,23 @@ GET  /api/dispatch/v2/active-orders       # 活動訂單
 POST /api/dispatch/v2/retrain-model       # 重訓練 ML 模型
 ```
 
+**1+1 疊單（Android 端相容）**
+- 模式定義：司機同時最多持有 `1` 張當前單 + `1` 張下一單，不支援更長隊列。
+- 新增訂單狀態：`QUEUED`，代表「已預掛給司機，但尚未輪到執行」。
+- 新增 payload 欄位：
+  - `queuePosition`: `1` 表示當前單，`2` 表示下一單
+  - `queuedAfterOrderId`: 下一單依附的前單 ID
+  - `predictedHandoverAt`: 預估交接時間（毫秒）
+  - `assignmentMode`: `SINGLE` / `STACKED_1P1`
+- Android 端行為：
+  - `HomeViewModel` 同時維護 `currentOrder` 與 `queuedOrder`
+  - 司機首頁分開顯示「當前訂單」與「下一單」
+  - 下一單若仍為 `OFFERED`，司機可直接接受或拒絕
+  - 主單完成或取消時，若下一單仍有效，App 會先在本地升為新的當前單
+- 目前邊界：
+  - 本 repo 已完成 Android 端資料模型、狀態流與 UI 相容
+  - 真正的 `1+1` 派單判斷、ETA 重算、保留/釋放重派仍需後端派單器配合
+
 ### Whisper 語音助理系統（v1.4.0 新增）
 
 **架構概覽**
@@ -1462,6 +1479,15 @@ GET  /api/drivers/:driverId/auto-accept-stats
 - 派單監控 API（統計/行為模式/拒單分析）
 - Android 端新增：RejectOrderDialog、batch-timeout 事件處理
 - Order 資料模型新增：batchNumber、estimatedFare、googleEtaSeconds、responseDeadline
+
+### v1.3.1 (2026-03-11)
+**1+1 疊單 Android 端承接**
+- 新增 `QUEUED` 訂單狀態，支援「當前單 + 下一單」模型
+- Order / OrderDto 新增：`queuePosition`、`queuedAfterOrderId`、`predictedHandoverAt`、`assignmentMode`
+- `HomeViewModel` 改為同時維護 `currentOrder` 與 `queuedOrder`
+- 司機首頁新增「下一單」卡片，清楚區分主單與預掛單
+- 主單完成或取消時，若下一單仍有效，App 會本地升單並維持載客狀態
+- 後端 `1+1` 派單規則、重算與重派仍需另外實作
 
 ### v1.2.9 (2025-12-08)
 - 乘客端評價司機功能

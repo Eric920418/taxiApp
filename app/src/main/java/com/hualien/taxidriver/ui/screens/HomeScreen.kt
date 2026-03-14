@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hualien.taxidriver.domain.model.DriverAvailability
+import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.ui.components.FareDialog
@@ -637,6 +638,19 @@ fun HomeScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        uiState.queuedOrder?.let { order ->
+            QueuedOrderCard(
+                order = order,
+                driverId = driverId,
+                driverName = driverName,
+                isLoading = uiState.isLoading,
+                onAccept = { viewModel.acceptOrder(order.orderId, driverId, driverName) },
+                onReject = { viewModel.rejectOrder(order.orderId, driverId) }
+            )
+
             Spacer(modifier = Modifier.height(16.dp))
         }
 
@@ -706,6 +720,183 @@ fun HomeScreen(
             )
         }
     } // 關閉 Box
+}
+
+@Composable
+private fun QueuedOrderCard(
+    order: Order,
+    driverId: String,
+    driverName: String,
+    isLoading: Boolean,
+    onAccept: () -> Unit,
+    onReject: () -> Unit
+) {
+    val handoverMinutes = remember(order.predictedHandoverAt) {
+        order.predictedHandoverAt?.let {
+            ((it - System.currentTimeMillis()) / 60000).toInt().coerceAtLeast(0)
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "🧾 下一單",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = when (order.status) {
+                            OrderStatus.OFFERED -> "等待您確認"
+                            OrderStatus.QUEUED -> "已預掛"
+                            else -> order.status.getDisplayName()
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+                    )
+                }
+                Surface(
+                    color = order.status.getColor().copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(999.dp)
+                ) {
+                    Text(
+                        text = when (order.status) {
+                            OrderStatus.OFFERED -> "待接受"
+                            OrderStatus.QUEUED -> "已鎖定"
+                            else -> order.status.getDisplayName()
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        color = order.status.getColor(),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+            order.queuedAfterOrderId?.let { previousOrderId ->
+                Text(
+                    text = "接在前單後：$previousOrderId",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            handoverMinutes?.let { minutes ->
+                Text(
+                    text = if (minutes == 0) "預估可立即交接" else "預估約 $minutes 分鐘後接手",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            Text(
+                text = "上車點",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+            )
+            Text(
+                text = order.pickup.address ?: "未提供地址",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+
+            order.destination?.let { destination ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "目的地",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+                )
+                Text(
+                    text = destination.address ?: "未提供地址",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            if (order.estimatedFare != null || order.etaToPickup != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    order.etaToPickup?.let { eta ->
+                        Text(
+                            text = "到客人約 $eta 分鐘",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    order.estimatedFare?.let { fare ->
+                        Text(
+                            text = "預估 NT$ $fare",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            OrderTagRow(
+                order = order,
+                modifier = Modifier.padding(top = 12.dp)
+            )
+
+            if (order.status == OrderStatus.OFFERED) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onReject,
+                        modifier = Modifier.weight(1f),
+                        enabled = !isLoading
+                    ) {
+                        Text("拒絕下一單")
+                    }
+                    Button(
+                        onClick = onAccept,
+                        modifier = Modifier.weight(1f),
+                        enabled = !isLoading
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Text("接受下一單")
+                        }
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "前單若取消或完成，系統會重新計算是否直接交接給您。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+                )
+            }
+        }
+    }
 }
 
 /**

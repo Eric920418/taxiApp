@@ -100,6 +100,24 @@ data class Order(
     @SerializedName("dispatchMethod")
     val dispatchMethod: String? = null,
 
+    // === 1+1 疊單相容欄位 ===
+
+    /** 隊列位置：1=當前單，2=下一單 */
+    @SerializedName("queuePosition")
+    val queuePosition: Int? = null,
+
+    /** 下一單所依附的前一張訂單 ID */
+    @SerializedName("queuedAfterOrderId")
+    val queuedAfterOrderId: String? = null,
+
+    /** 預估前單交接時間（毫秒） */
+    @SerializedName("predictedHandoverAt")
+    val predictedHandoverAt: Long? = null,
+
+    /** 指派模式：SINGLE / STACKED_1P1 */
+    @SerializedName("assignmentMode")
+    val assignmentMode: String? = null,
+
     // === 電話叫車系統擴展欄位 ===
 
     /** 訂單來源：APP / PHONE / LINE */
@@ -171,6 +189,18 @@ data class Order(
     fun canSettle(): Boolean = status == OrderStatus.SETTLING
 
     /**
+     * 是否為 1+1 的下一單
+     */
+    fun isQueuedOrder(): Boolean {
+        return status == OrderStatus.QUEUED || queuePosition == 2 || assignmentMode == "STACKED_1P1" && status == OrderStatus.OFFERED
+    }
+
+    /**
+     * 是否為目前執行中的主單
+     */
+    fun isPrimaryOrder(): Boolean = !isQueuedOrder()
+
+    /**
      * 計算行程時長（分鐘）
      */
     fun getTripDurationMinutes(): Int? {
@@ -203,6 +233,26 @@ data class Order(
      */
     fun getGoogleEtaMinutes(): Int? {
         return googleEtaSeconds?.let { (it / 60).coerceAtLeast(1) }
+    }
+
+    /**
+     * 下一單預估交接剩餘秒數
+     */
+    fun getRemainingHandoverSeconds(): Int {
+        return predictedHandoverAt?.let { handoverAt ->
+            val remaining = (handoverAt - System.currentTimeMillis()) / 1000
+            maxOf(0, remaining.toInt())
+        } ?: 0
+    }
+
+    /**
+     * 將下一單升為當前單的本地表示
+     */
+    fun promoteQueuedToCurrent(): Order {
+        return copy(
+            statusString = OrderStatus.ACCEPTED.name,
+            queuePosition = 1
+        )
     }
 
     // === 電話叫車輔助方法 ===

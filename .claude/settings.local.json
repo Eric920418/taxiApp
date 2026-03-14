@@ -37,7 +37,8 @@
       "Bash(echo NO_LOCAL_AWS:*)",
       "Bash(nc:*)",
       "Bash(cd:*)",
-      "WebFetch(domain:community.asterisk.org)"
+      "WebFetch(domain:community.asterisk.org)",
+      "WebFetch(domain:www.voip-info.org)"
     ],
     "deny": [],
     "ask": []

@@ -198,6 +198,16 @@ data class OrderDto(
     @SerializedName("dispatchMethod")
     val dispatchMethod: String? = null,
 
+    // === 1+1 疊單相容欄位 ===
+    @SerializedName("queuePosition")
+    val queuePosition: Int? = null,
+    @SerializedName("queuedAfterOrderId")
+    val queuedAfterOrderId: String? = null,
+    @SerializedName("predictedHandoverAt")
+    val predictedHandoverAt: Long? = null,
+    @SerializedName("assignmentMode")
+    val assignmentMode: String? = null,
+
     // === 電話叫車系統擴展欄位 ===
     @SerializedName("source")
     val source: String? = null,
@@ -299,6 +309,10 @@ data class OrderDto(
             googleEtaSeconds = googleEtaSeconds,
             responseDeadline = responseDeadline,
             dispatchMethod = dispatchMethod,
+            queuePosition = queuePosition,
+            queuedAfterOrderId = queuedAfterOrderId,
+            predictedHandoverAt = predictedHandoverAt,
+            assignmentMode = assignmentMode,
             source = source ?: "APP",
             subsidyType = subsidyType ?: "NONE",
             petPresent = petPresent ?: "UNKNOWN",
