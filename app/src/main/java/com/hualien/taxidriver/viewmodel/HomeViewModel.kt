@@ -536,8 +536,9 @@ class HomeViewModel : ViewModel() {
         android.util.Log.d("HomeViewModel", "司機ID: $driverId")
         android.util.Log.d("HomeViewModel", "司機姓名: $driverName")
 
-        // 立即停止語音播報和清除語音狀態（不管 API 是否成功）
+        // 立即停止語音播報、語音錄音和清除語音狀態（不管 API 是否成功）
         voiceAssistant?.stop()
+        voiceRecorderService?.cancelRecording()
         clearVoiceOrderState()
 
         viewModelScope.launch {
@@ -579,8 +580,9 @@ class HomeViewModel : ViewModel() {
      * 拒絕訂單
      */
     fun rejectOrder(orderId: String, driverId: String, reason: String = "司機忙碌") {
-        // 立即停止語音播報和清除語音狀態（不管 API 是否成功）
+        // 立即停止語音播報、語音錄音和清除語音狀態（不管 API 是否成功）
         voiceAssistant?.stop()
+        voiceRecorderService?.cancelRecording()
         clearVoiceOrderState()
 
         // 立即清除訂單（樂觀更新），防止 Whisper 非同步回調中
@@ -1201,6 +1203,13 @@ class HomeViewModel : ViewModel() {
     private fun transcribeAudioForOrder(audioFile: File, driverId: String) {
         viewModelScope.launch {
             android.util.Log.d("HomeViewModel", "========== 語音識別（訂單模式）==========")
+
+            // 如果訂單已不是 OFFERED 狀態（例如已接單/已拒絕），跳過識別
+            if (_uiState.value.currentOrder?.status != OrderStatus.OFFERED) {
+                android.util.Log.d("HomeViewModel", "⚠️ 訂單已非 OFFERED 狀態，跳過語音識別")
+                try { audioFile.delete() } catch (_: Exception) {}
+                return@launch
+            }
 
             try {
                 // 準備 multipart 請求
