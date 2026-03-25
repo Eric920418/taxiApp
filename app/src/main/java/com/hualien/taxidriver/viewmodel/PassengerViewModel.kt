@@ -24,6 +24,7 @@ import com.hualien.taxidriver.service.PlacesApiService
 import com.hualien.taxidriver.service.PlaceDetails
 import com.hualien.taxidriver.service.PlacePrediction
 import com.hualien.taxidriver.utils.FareCalculator
+import com.hualien.taxidriver.utils.GeocodingUtils
 import com.hualien.taxidriver.utils.FareResult
 import com.hualien.taxidriver.utils.PassengerNotificationHelper
 import com.hualien.taxidriver.utils.PassengerVoiceCommandHandler
@@ -110,6 +111,7 @@ data class PassengerUiState(
     // 語音自動流程狀態
     val voiceAutoflowState: VoiceAutoflowState = VoiceAutoflowState.IDLE,
     val pendingDestinationDetails: PlaceDetails? = null,    // 待確認的目的地詳情
+    val originalVoiceQuery: String? = null,                 // 語音原始查詢（用於確認時對比）
     val showPickupMapSelector: Boolean = false,             // 顯示 Uber 風格地圖選點
 
     // 語音狀態
@@ -1509,56 +1511,93 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
     // ==================== 語音自動流程 ====================
 
     /**
-     * 語音自動流程：搜尋目的地並自動選擇第一個結果
-     * 用戶說「去中原大學」後觸發
+     * 偵測查詢是否為街道門牌地址（含 路/街/巷/弄/號）
+     */
+    private fun isStreetAddress(query: String): Boolean {
+        return Regex("[路街巷弄號]").containsMatchIn(query)
+    }
+
+    /**
+     * 從街道地址查詢中提取街道名稱（用於驗證結果）
+     * 例如 "信豐街805" → "信豐街", "中山路100號" → "中山路"
+     */
+    private fun extractStreetName(query: String): String? {
+        val match = Regex("([\\u4e00-\\u9fa5]+[路街巷弄])").find(query)
+        return match?.groupValues?.get(1)
+    }
+
+    /**
+     * 使用 Android Geocoder 解析街道地址
+     * 自動加花蓮前綴，仿後端 PhoneCallProcessor.geocodeWithGeocodingAPI
+     */
+    private suspend fun resolveStreetAddress(query: String): PlaceDetails? {
+        val townships = listOf("吉安","新城","壽豐","光復","豐濱","瑞穗","富里","秀林","萬榮","卓溪","玉里","鳳林")
+        val prefix = when {
+            query.startsWith("花蓮") -> ""
+            townships.any { query.contains(it) } -> "花蓮縣"
+            else -> "花蓮縣花蓮市"
+        }
+        val fullAddress = "$prefix$query"
+
+        android.util.Log.d(TAG, "Geocoder 街道地址查詢: $fullAddress")
+
+        val appContext = getApplication<android.app.Application>()
+        val latLng = GeocodingUtils.getLocationFromAddress(appContext, fullAddress)
+        if (latLng != null) {
+            val formattedAddress = GeocodingUtils.getAddressFromLocation(appContext, latLng)
+            android.util.Log.d(TAG, "Geocoder 成功: $formattedAddress ($latLng)")
+
+            return PlaceDetails(
+                placeId = "",
+                name = query,
+                address = formattedAddress,
+                latLng = latLng,
+                phoneNumber = null,
+                types = listOf("street_address")
+            )
+        }
+
+        android.util.Log.w(TAG, "Geocoder 無結果: $fullAddress")
+        return null
+    }
+
+    /**
+     * 語音自動流程：搜尋目的地
+     * 街道地址 → Geocoder API，地標 → Places API
      */
     fun searchAndAutoSelectDestination(destinationQuery: String) {
         android.util.Log.d(TAG, "語音自動流程：搜尋目的地「$destinationQuery」")
 
         _uiState.value = _uiState.value.copy(
-            voiceAutoflowState = VoiceAutoflowState.SEARCHING_DESTINATION
+            voiceAutoflowState = VoiceAutoflowState.SEARCHING_DESTINATION,
+            originalVoiceQuery = destinationQuery
         )
 
         viewModelScope.launch {
             try {
-                // 使用 PlacesApiService 搜尋地點
-                val currentLocation = _uiState.value.currentLocation
-                val result = placesApiService.searchPlaces(
-                    query = destinationQuery,
-                    bias = currentLocation
-                )
+                if (isStreetAddress(destinationQuery)) {
+                    // 街道地址 → 優先使用 Geocoder API
+                    android.util.Log.d(TAG, "偵測為街道地址，使用 Geocoder")
+                    val geocoderResult = resolveStreetAddress(destinationQuery)
 
-                result.onSuccess { predictions ->
-                    if (predictions.isEmpty()) {
-                        android.util.Log.w(TAG, "搜尋無結果")
-                        speakWithBubble("抱歉，找不到「$destinationQuery」，請重新說出目的地")
-                        _uiState.value = _uiState.value.copy(
-                            voiceAutoflowState = VoiceAutoflowState.IDLE
-                        )
-                        return@launch
+                    if (geocoderResult != null) {
+                        val streetName = extractStreetName(destinationQuery)
+                        if (streetName != null && !geocoderResult.address.contains(streetName)) {
+                            // Geocoder 結果街名不匹配，fallback 到 Places
+                            android.util.Log.w(TAG, "Geocoder 結果不匹配: 查詢=$destinationQuery, 結果=${geocoderResult.address}")
+                            searchWithPlacesApi(destinationQuery)
+                        } else {
+                            setPendingDestination(geocoderResult)
+                        }
+                    } else {
+                        // Geocoder 失敗，fallback 到 Places
+                        android.util.Log.d(TAG, "Geocoder 無結果，回退到 Places API")
+                        searchWithPlacesApi(destinationQuery)
                     }
-
-                    // 自動選擇第一個結果
-                    val firstPrediction = predictions.first()
-                    android.util.Log.d(TAG, "自動選擇: ${firstPrediction.primaryText}")
-
-                    // 獲取詳細資訊（座標）
-                    val detailsResult = placesApiService.getPlaceDetails(firstPrediction.placeId)
-                    detailsResult.onSuccess { details ->
-                        setPendingDestination(details)
-                    }.onFailure { error ->
-                        android.util.Log.e(TAG, "獲取地點詳情失敗", error)
-                        speakWithBubble("抱歉，無法獲取地點資訊，請再試一次")
-                        _uiState.value = _uiState.value.copy(
-                            voiceAutoflowState = VoiceAutoflowState.IDLE
-                        )
-                    }
-                }.onFailure { error ->
-                    android.util.Log.e(TAG, "搜尋地點失敗", error)
-                    speakWithBubble("抱歉，搜尋失敗，請再試一次")
-                    _uiState.value = _uiState.value.copy(
-                        voiceAutoflowState = VoiceAutoflowState.IDLE
-                    )
+                } else {
+                    // 地標 → Places API（原有邏輯）
+                    android.util.Log.d(TAG, "偵測為地標名稱，使用 Places API")
+                    searchWithPlacesApi(destinationQuery)
                 }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "搜尋異常", e)
@@ -1567,6 +1606,56 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
                     voiceAutoflowState = VoiceAutoflowState.IDLE
                 )
             }
+        }
+    }
+
+    /**
+     * 使用 Places Autocomplete 搜尋地點（地標路徑 / Geocoder fallback）
+     */
+    private suspend fun searchWithPlacesApi(destinationQuery: String) {
+        val currentLocation = _uiState.value.currentLocation
+        val result = placesApiService.searchPlaces(
+            query = destinationQuery,
+            bias = currentLocation
+        )
+
+        result.onSuccess { predictions ->
+            if (predictions.isEmpty()) {
+                android.util.Log.w(TAG, "搜尋無結果")
+                speakWithBubble("抱歉，找不到「$destinationQuery」，請重新說出目的地")
+                _uiState.value = _uiState.value.copy(
+                    voiceAutoflowState = VoiceAutoflowState.IDLE
+                )
+                return
+            }
+
+            // 如果是街道地址查詢（Geocoder fallback），優先選包含街名的結果
+            val streetName = extractStreetName(destinationQuery)
+            val bestPrediction = if (streetName != null) {
+                predictions.firstOrNull { it.fullText.contains(streetName) }
+                    ?: predictions.first()
+            } else {
+                predictions.first()
+            }
+
+            android.util.Log.d(TAG, "自動選擇: ${bestPrediction.primaryText}")
+
+            val detailsResult = placesApiService.getPlaceDetails(bestPrediction.placeId)
+            detailsResult.onSuccess { details ->
+                setPendingDestination(details)
+            }.onFailure { error ->
+                android.util.Log.e(TAG, "獲取地點詳情失敗", error)
+                speakWithBubble("抱歉，無法獲取地點資訊，請再試一次")
+                _uiState.value = _uiState.value.copy(
+                    voiceAutoflowState = VoiceAutoflowState.IDLE
+                )
+            }
+        }.onFailure { error ->
+            android.util.Log.e(TAG, "搜尋地點失敗", error)
+            speakWithBubble("抱歉，搜尋失敗，請再試一次")
+            _uiState.value = _uiState.value.copy(
+                voiceAutoflowState = VoiceAutoflowState.IDLE
+            )
         }
     }
 
@@ -1627,8 +1716,22 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
                         // 計算最近司機的預估到達時間
                         val etaMessage = getEstimatedPickupTime()
 
+                        // 判斷解析結果是否與用戶原話不同，需明確提示差異
+                        val originalQuery = _uiState.value.originalVoiceQuery
+                        val resolvedName = details.name
+                        val needsExplicitConfirm = originalQuery != null
+                                && resolvedName != originalQuery
+                                && !resolvedName.contains(originalQuery)
+                                && !originalQuery.contains(resolvedName)
+
+                        val confirmMessage = if (needsExplicitConfirm) {
+                            "您說的是「$originalQuery」，找到的是「$resolvedName」，$fareMessage，$etaMessage，對嗎？"
+                        } else {
+                            "去$resolvedName，$fareMessage，$etaMessage，可以等嗎？"
+                        }
+
                         speakWithBubbleAndCallback(
-                            message = "去${details.name}，$fareMessage，$etaMessage，可以等嗎？",
+                            message = confirmMessage,
                             onComplete = {
                                 android.util.Log.d(TAG, "語音詢問完成，自動開始錄音監聽回應")
                                 if (_uiState.value.voiceAutoflowState == VoiceAutoflowState.CONFIRMING_DESTINATION) {
@@ -1658,8 +1761,20 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
      */
     private fun speakSimpleConfirmation(details: PlaceDetails) {
         val etaMessage = getEstimatedPickupTime()
+        val originalQuery = _uiState.value.originalVoiceQuery
+        val resolvedName = details.name
+        val needsExplicitConfirm = originalQuery != null
+                && resolvedName != originalQuery
+                && !resolvedName.contains(originalQuery)
+                && !originalQuery.contains(resolvedName)
+
+        val confirmMessage = if (needsExplicitConfirm) {
+            "您說的是「$originalQuery」，找到的是「$resolvedName」，$etaMessage，對嗎？"
+        } else {
+            "去$resolvedName，$etaMessage，可以等嗎？"
+        }
         speakWithBubbleAndCallback(
-            message = "去${details.name}，$etaMessage，可以等嗎？",
+            message = confirmMessage,
             onComplete = {
                 android.util.Log.d(TAG, "語音詢問完成，自動開始錄音監聽回應")
                 if (_uiState.value.voiceAutoflowState == VoiceAutoflowState.CONFIRMING_DESTINATION) {
@@ -1905,7 +2020,8 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
     private fun resetVoiceAutoflow() {
         _uiState.value = _uiState.value.copy(
             voiceAutoflowState = VoiceAutoflowState.IDLE,
-            pendingDestinationDetails = null
+            pendingDestinationDetails = null,
+            originalVoiceQuery = null
         )
     }
 
@@ -1956,7 +2072,8 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
 
         _uiState.value = _uiState.value.copy(
             voiceAutoflowState = VoiceAutoflowState.IDLE,
-            pendingDestinationDetails = null
+            pendingDestinationDetails = null,
+            originalVoiceQuery = null
         )
 
         // 語音提示後自動開始錄音
@@ -2028,6 +2145,7 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.value = _uiState.value.copy(
             voiceAutoflowState = VoiceAutoflowState.IDLE,
             pendingDestinationDetails = null,
+            originalVoiceQuery = null,
             showPickupMapSelector = false
         )
 

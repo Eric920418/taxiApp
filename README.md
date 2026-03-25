@@ -516,7 +516,20 @@ Android Studio → Extended Controls → Location
 
 ## 版本歷史
 
-### v1.9.2 (2026-03-09) - 當前版本
+### v1.9.3 (2026-03-25) - 當前版本
+**修復：語音叫車地址亂匹配問題**
+
+修復語音輸入街道門牌地址（如「信豐街805」）被 Google Places API 模糊匹配為完全不同地址（如「中和街163號」）的嚴重問題。
+
+- **根因**：Places Autocomplete 專為地標/商家搜尋設計，對街道門牌地址的模糊匹配會返回不相關結果，且系統盲目 auto-select 第一個結果
+- **修復**：`searchAndAutoSelectDestination()` 重構為雙路徑分流：
+  - **街道地址**（含 路/街/巷/弄/號）→ Android Geocoder API（精確門牌解析），自動加花蓮前綴
+  - **地標名稱**（火車站、慈濟等）→ Google Places API（原有邏輯不變）
+- **驗證機制**：Geocoder 結果需包含原始街名，否則 fallback 到 Places API
+- **透明確認**：當解析結果與用戶原話不同時，語音提示差異：「您說的是 XX，找到的是 YY，對嗎？」
+- **影響檔案**：僅 `PassengerViewModel.kt`（新增 `isStreetAddress()`、`extractStreetName()`、`resolveStreetAddress()`、`searchWithPlacesApi()`）
+
+### v1.9.2 (2026-03-09)
 **修復：電話叫車地址辨識準確性**
 
 修復 `CallFieldExtractor.ts` 和 `PhoneCallProcessor.ts` 中四個地址辨識 bug：
@@ -1441,7 +1454,7 @@ GET  /api/drivers/:driverId/auto-accept-stats
   - 拖曳時自動反向地理編碼
   - 目的地卡片顯示
 - `PassengerViewModel` 新增語音自動流程方法：
-  - `searchAndAutoSelectDestination()` - 自動搜尋並選擇第一個結果
+  - `searchAndAutoSelectDestination()` - 街道地址走 Geocoder、地標走 Places API
   - `confirmDestination()` / `rejectDestination()` - 確認/拒絕目的地
   - `confirmPickupAndBook()` - 確認上車點並自動叫車
 - 視覺反饋：搜尋中 / 等待確認 卡片提示
