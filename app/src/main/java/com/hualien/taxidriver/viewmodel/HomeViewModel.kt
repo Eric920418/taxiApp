@@ -540,6 +540,7 @@ class HomeViewModel : ViewModel() {
         voiceAssistant?.stop()
         voiceRecorderService?.cancelRecording()
         clearVoiceOrderState()
+        webSocketManager.clearOrderOffer()
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
@@ -593,6 +594,11 @@ class HomeViewModel : ViewModel() {
             queuedOrder = if (isQueuedReject) null else _uiState.value.queuedOrder,
             isLoading = true
         )
+
+        // 清除 WebSocket 層的訂單，防止 StateFlow 殘留數據在 ViewModel 重建時觸發重複播報
+        if (!isQueuedReject) {
+            webSocketManager.clearOrderOffer()
+        }
 
         viewModelScope.launch {
             repository.rejectOrder(orderId, driverId, reason)
@@ -1132,14 +1138,18 @@ class HomeViewModel : ViewModel() {
             message = message,
             priority = VoiceAssistant.Priority.URGENT,
             onComplete = {
-                if (_uiState.value.voiceAutoListenEnabled) {
+                if (_uiState.value.voiceAutoListenEnabled &&
+                    _uiState.value.currentOrder?.status == OrderStatus.OFFERED) {
                     android.util.Log.d("HomeViewModel", "播報完成，準備開始語音監聽")
                     // 使用 viewModelScope 確保在正確的協程上下文中執行
                     viewModelScope.launch {
                         // 短暫延遲，避免錄到 TTS 回音
                         kotlinx.coroutines.delay(300)
-                        android.util.Log.d("HomeViewModel", "開始語音監聽")
-                        startVoiceListeningForOrder()
+                        // 再次確認訂單仍為 OFFERED（防止延遲期間訂單被拒絕/接受）
+                        if (_uiState.value.currentOrder?.status == OrderStatus.OFFERED) {
+                            android.util.Log.d("HomeViewModel", "開始語音監聽")
+                            startVoiceListeningForOrder()
+                        }
                     }
                 }
             }

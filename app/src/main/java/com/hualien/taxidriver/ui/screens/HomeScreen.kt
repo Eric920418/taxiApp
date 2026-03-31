@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,10 +25,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hualien.taxidriver.domain.model.DriverAvailability
@@ -42,14 +47,30 @@ import com.hualien.taxidriver.ui.components.VoiceChatPanel
 import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 
+// ====== 新 UI 顏色定義 ======
+private val HeaderGradientStart = Color(0xFF1976D2)
+private val HeaderGradientEnd = Color(0xFF1565C0)
+private val ButtonActiveGreen = Color(0xFF4CAF50)
+private val ButtonInactiveBg = Color(0xFFF5F5F5)
+private val OrderCardYellow = Color(0xFFFFF8E1)
+private val ActionBlue = Color(0xFF1976D2)
+private val ScreenBackground = Color(0xFFECEFF1)
+private val StatusGreen = Color(0xFF4CAF50)
+private val StatusOrange = Color(0xFFFF9800)
+private val StatusGray = Color(0xFF9E9E9E)
+private val StatusBlue = Color(0xFF2196F3)
+private val DarkText = Color(0xFF212121)
+private val SubText = Color(0xFF757575)
+
 /**
- * 主頁面 - 司機狀態 + 訂單管理
+ * 主頁面 - 司機狀態 + 訂單管理（大按鈕版本，適合老年司機）
  */
 @Composable
 fun HomeScreen(
     driverId: String,
     driverName: String,
-    viewModel: HomeViewModel = viewModel()
+    viewModel: HomeViewModel = viewModel(),
+    onNavigateToOrders: (() -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -97,7 +118,7 @@ fun HomeScreen(
     // 初始化語音服務
     LaunchedEffect(driverId, driverName) {
         viewModel.initVoiceServices(context, driverId, driverName)
-        viewModel.initVoiceChat(context)  // 初始化語音對講
+        viewModel.initVoiceChat(context)
     }
 
     // 當訂單被接受時，設置語音對講用戶資訊
@@ -109,12 +130,9 @@ fun HomeScreen(
     }
 
     // 建立 WebSocket 連接（司機上線）並設置初始狀態
-    // 使用 driverId 作為 key，確保只在 driverId 變化時才重新連接
     LaunchedEffect(driverId) {
         viewModel.connectWebSocket(driverId)
-        // 自動設置為可接單狀態
         viewModel.updateDriverStatus(driverId, DriverAvailability.AVAILABLE)
-        // 加載今日統計
         viewModel.loadTodayStats(driverId)
     }
 
@@ -122,13 +140,11 @@ fun HomeScreen(
     LaunchedEffect(uiState.currentOrder) {
         val order = uiState.currentOrder
         if (order != null && order.status == OrderStatus.OFFERED) {
-            // 新訂單到達，自動播報
             viewModel.announceNewOrder(order)
         }
     }
 
     // WebSocket 生命週期由 ViewModel.onCleared() 管理，不在 UI 層斷開
-    // 避免畫面切換/重組時誤觸發斷線
 
     // 根據司機狀態啟動/停止定位服務
     LaunchedEffect(uiState.driverStatus, hasLocationPermission) {
@@ -148,443 +164,549 @@ fun HomeScreen(
         }
     }
 
-    // 使用 Box 包裝，以便加入語音按鈕和指示器
+    // ====== UI 佈局 ======
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-        // 司機狀態卡片
-        DriverStatusCard(
-            driverStatus = uiState.driverStatus,
-            driverName = driverName
-        )
+        val currentOrder = uiState.currentOrder
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 今日統計卡片
-        TodayStatsCard(
-            orderCount = uiState.todayOrderCount,
-            earnings = uiState.todayEarnings,
-            distance = uiState.todayDistance
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 當前訂單卡片
-        uiState.currentOrder?.let { order ->
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
+        if (currentOrder == null) {
+            // ====== 無訂單：固定佈局 + 2x2 網格 ======
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(ScreenBackground)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
+                NewTopBar(title = driverName)
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                NewStatsBar(
+                    status = uiState.driverStatus,
+                    orderCount = uiState.todayOrderCount,
+                    earnings = uiState.todayEarnings,
+                    distance = uiState.todayDistance,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                NewStatusGrid(
+                    currentStatus = uiState.driverStatus,
+                    onStatusChange = { newStatus ->
+                        viewModel.updateDriverStatus(driverId, newStatus)
+                    },
+                    onNavigateToOrders = onNavigateToOrders,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 16.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        } else {
+            // ====== 有訂單：可滾動佈局 ======
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(ScreenBackground)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                NewTopBar(title = "返回主頁")
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                NewStatsBar(
+                    status = uiState.driverStatus,
+                    orderCount = uiState.todayOrderCount,
+                    earnings = uiState.todayEarnings,
+                    distance = uiState.todayDistance,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // ====== 訂單資訊卡 ======
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = OrderCardYellow),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "🚗 當前訂單",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = when (order.status) {
-                                OrderStatus.OFFERED -> "新訂單"
-                                OrderStatus.ACCEPTED -> "已接單"
-                                OrderStatus.ARRIVED -> "已到達"
-                                OrderStatus.ON_TRIP -> "行程中"
-                                OrderStatus.SETTLING -> "結算中"
-                                else -> order.status.name
-                            },
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-
-                    // 訂單來源 / 補貼 / 寵物 標籤
-                    if (order.source != null && order.source != "APP") {
-                        OrderTagRow(
-                            order = order,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                    }
-
-                    // 乘客資訊
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = "乘客",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = order.passengerName,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-
-                    // 電話訂單：來電號碼
-                    if (order.isPhoneOrder() && !order.customerPhone.isNullOrEmpty()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        // 標題行
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(bottom = 8.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Phone,
-                                contentDescription = "來電號碼",
-                                tint = Color(0xFFFF8C00)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "來電: ${order.customerPhone}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color(0xFFFF8C00),
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    // 電話 + 一鍵撥號按鈕
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Phone,
-                                contentDescription = "電話",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = order.passengerPhone ?: "未提供電話",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-
-                        // 操作按鈕（語音對講 + 一鍵撥號）
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            // 語音對講按鈕（接單後顯示）
-                            if (viewModel.canUseVoiceChat()) {
-                                MiniVoiceChatButton(
-                                    onClick = { viewModel.showVoiceChatPanel() },
-                                    hasUnread = voiceChatUnreadCount > 0
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "🚕", fontSize = 20.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "目前訂單",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = DarkText
                                 )
                             }
-
-                            // 一鍵撥號按鈕
-                            order.passengerPhone?.let { phone ->
-                                FilledTonalButton(
-                                    onClick = {
-                                        val intent = Intent(Intent.ACTION_DIAL).apply {
-                                            data = Uri.parse("tel:$phone")
-                                        }
-                                        context.startActivity(intent)
+                            Surface(
+                                color = when (currentOrder.status) {
+                                    OrderStatus.OFFERED -> StatusBlue
+                                    OrderStatus.ACCEPTED -> StatusGreen
+                                    OrderStatus.ARRIVED -> Color(0xFF9C27B0)
+                                    OrderStatus.ON_TRIP -> Color(0xFF00BCD4)
+                                    OrderStatus.SETTLING -> StatusOrange
+                                    else -> StatusGray
+                                }.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = when (currentOrder.status) {
+                                        OrderStatus.OFFERED -> "新訂單"
+                                        OrderStatus.ACCEPTED -> "已接單"
+                                        OrderStatus.ARRIVED -> "已到達"
+                                        OrderStatus.ON_TRIP -> "行程中"
+                                        OrderStatus.SETTLING -> "結算中"
+                                        else -> currentOrder.status.name
                                     },
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Call,
-                                        contentDescription = "撥打電話",
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("撥打")
-                                }
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (currentOrder.status) {
+                                        OrderStatus.OFFERED -> StatusBlue
+                                        OrderStatus.ACCEPTED -> StatusGreen
+                                        OrderStatus.ARRIVED -> Color(0xFF9C27B0)
+                                        OrderStatus.ON_TRIP -> Color(0xFF00BCD4)
+                                        OrderStatus.SETTLING -> StatusOrange
+                                        else -> StatusGray
+                                    }
+                                )
                             }
                         }
-                    }
 
-                    // 距離和時間資訊（如果有）
-                    if (order.distanceToPickup != null || order.tripDistance != null) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // 訂單標籤（來源/補貼/寵物）
+                        if (currentOrder.source != null && currentOrder.source != "APP") {
+                            OrderTagRow(
+                                order = currentOrder,
+                                modifier = Modifier.padding(bottom = 8.dp)
                             )
+                        }
+
+                        // 電話號碼
+                        val displayPhone = currentOrder.passengerPhone ?: currentOrder.customerPhone
+                        displayPhone?.let { phone ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(bottom = 10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = null,
+                                    tint = ActionBlue,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = phone,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = DarkText
+                                )
+                            }
+                        }
+
+                        // 電話訂單來電號碼（如果與顯示電話不同）
+                        if (currentOrder.isPhoneOrder() && !currentOrder.customerPhone.isNullOrEmpty()
+                            && currentOrder.customerPhone != displayPhone
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceEvenly
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(bottom = 10.dp)
                             ) {
-                                // 到客人的距離和時間
-                                order.distanceToPickup?.let { distance ->
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text(
-                                            text = "🚗 到客人",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                        Text(
-                                            text = distance.formatKilometers(),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                        order.etaToPickup?.let { eta ->
-                                            Text(
-                                                text = "約 $eta 分鐘",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                                            )
-                                        }
-                                    }
-                                }
-
-                                // 分隔線（如果兩者都有的話）
-                                if (order.distanceToPickup != null && order.tripDistance != null) {
-                                    Box(
-                                        modifier = Modifier
-                                            .width(1.dp)
-                                            .height(50.dp)
-                                            .background(MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f))
-                                    )
-                                }
-
-                                // 行程距離和時間
-                                order.tripDistance?.let { distance ->
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text(
-                                            text = "📍 行程",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                        Text(
-                                            text = distance.formatKilometers(),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                        order.estimatedTripDuration?.let { duration ->
-                                            Text(
-                                                text = "約 $duration 分鐘",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                                            )
-                                        }
-                                    }
-                                }
-
-                                // 預估車資
-                                order.estimatedFare?.let { fare ->
-                                    // 分隔線
-                                    if (order.tripDistance != null) {
-                                        Box(
-                                            modifier = Modifier
-                                                .width(1.dp)
-                                                .height(50.dp)
-                                                .background(MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f))
-                                        )
-                                    }
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text(
-                                            text = "💰 車資",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                        Text(
-                                            text = "NT$ $fare",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF4CAF50)  // 綠色強調
-                                        )
-                                        Text(
-                                            text = "預估",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                    }
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF8C00),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "來電: ${currentOrder.customerPhone}",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFFF8C00)
+                                )
                             }
                         }
-                    }
 
-                    // 上車點
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
-                        )
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.Top) {
+                        // 上車點
+                        Row(
+                            verticalAlignment = Alignment.Top,
+                            modifier = Modifier.padding(bottom = 10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Place,
+                                contentDescription = null,
+                                tint = Color(0xFF4CAF50),
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "上車",
+                                    fontSize = 14.sp,
+                                    color = SubText
+                                )
+                                Text(
+                                    text = currentOrder.pickup.address ?: "未提供地址",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = DarkText,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        // 目的地
+                        currentOrder.destination?.let { dest ->
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            ) {
                                 Icon(
-                                    imageVector = Icons.Default.Place,
-                                    contentDescription = "上車點",
-                                    tint = Color(0xFF4CAF50)
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = null,
+                                    tint = Color(0xFF4CAF50),
+                                    modifier = Modifier.size(22.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "上車點",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        text = "目的地",
+                                        fontSize = 14.sp,
+                                        color = SubText
                                     )
                                     Text(
-                                        text = order.pickup.address ?: "未提供地址",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Medium
+                                        text = dest.address ?: "未提供地址",
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = DarkText,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                        // 距離和時間資訊
+                        if (currentOrder.distanceToPickup != null || currentOrder.tripDistance != null || currentOrder.estimatedFare != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.7f)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceEvenly
+                                ) {
+                                    currentOrder.distanceToPickup?.let { distance ->
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text("🚗 到客人", fontSize = 12.sp, color = SubText)
+                                            Text(
+                                                text = distance.formatKilometers(),
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = DarkText
+                                            )
+                                            currentOrder.etaToPickup?.let { eta ->
+                                                Text("約 $eta 分鐘", fontSize = 12.sp, color = SubText)
+                                            }
+                                        }
+                                    }
 
-                    // 目的地
-                    order.destination?.let { dest ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surface
-                            )
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(verticalAlignment = Alignment.Top) {
-                                    Icon(
-                                        imageVector = Icons.Default.LocationOn,
-                                        contentDescription = "目的地",
-                                        tint = Color(0xFFF44336)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = "目的地",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    if (currentOrder.distanceToPickup != null && (currentOrder.tripDistance != null || currentOrder.estimatedFare != null)) {
+                                        Box(
+                                            modifier = Modifier
+                                                .width(1.dp)
+                                                .height(40.dp)
+                                                .background(Color(0xFFE0E0E0))
                                         )
-                                        Text(
-                                            text = dest.address ?: "未提供地址",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.Medium
-                                        )
+                                    }
+
+                                    currentOrder.tripDistance?.let { distance ->
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text("📍 行程", fontSize = 12.sp, color = SubText)
+                                            Text(
+                                                text = distance.formatKilometers(),
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = DarkText
+                                            )
+                                            currentOrder.estimatedTripDuration?.let { duration ->
+                                                Text("約 $duration 分鐘", fontSize = 12.sp, color = SubText)
+                                            }
+                                        }
+                                    }
+
+                                    currentOrder.estimatedFare?.let { fare ->
+                                        if (currentOrder.tripDistance != null) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(1.dp)
+                                                    .height(40.dp)
+                                                    .background(Color(0xFFE0E0E0))
+                                            )
+                                        }
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text("💰 車資", fontSize = 12.sp, color = SubText)
+                                            Text(
+                                                text = "NT$ $fare",
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF4CAF50)
+                                            )
+                                            Text("預估", fontSize = 12.sp, color = SubText)
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // 電話訂單：目的地確認按鈕
-                    if (order.needsDestinationConfirmation()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFFFF3E0)
-                            )
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "電話訂單 - 請確認目的地",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color(0xFFE65100),
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
+                        // 電話訂單：上車地點未確認警告
+                        val pickupUnclear = currentOrder.isPhoneOrder() &&
+                                (currentOrder.pickup.address?.contains("待確認") == true ||
+                                        currentOrder.pickup.address.isNullOrEmpty())
+                        if (pickupUnclear) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                                border = BorderStroke(2.dp, Color(0xFFF44336)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = Color(0xFFC62828),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "上車地點未確認",
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFC62828)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "客人未說明位置，請回撥確認",
+                                        fontSize = 14.sp,
+                                        color = Color(0xFFC62828)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    val callbackPhone = currentOrder.customerPhone ?: currentOrder.passengerPhone
+                                    callbackPhone?.let { phone ->
+                                        Button(
+                                            onClick = {
+                                                val intent = Intent(Intent.ACTION_DIAL).apply {
+                                                    data = Uri.parse("tel:$phone")
+                                                }
+                                                context.startActivity(intent)
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFFF44336)
+                                            ),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("回撥確認地址：$phone", fontSize = 16.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 電話訂單：目的地確認按鈕
+                        if (currentOrder.needsDestinationConfirmation()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "電話訂單 - 請確認目的地",
+                                        fontSize = 14.sp,
+                                        color = Color(0xFFE65100),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
                                     Button(
-                                        onClick = { viewModel.confirmDestination(order.orderId) },
-                                        modifier = Modifier.weight(1f),
+                                        onClick = { viewModel.confirmDestination(currentOrder.orderId) },
+                                        modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = Color(0xFF4CAF50)
-                                        )
+                                        ),
+                                        shape = RoundedCornerShape(12.dp)
                                     ) {
                                         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("確認目的地")
+                                        Text("確認目的地", fontSize = 16.sp)
                                     }
                                 }
                             }
                         }
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                    // 導航按鈕
-                    if (order.status == OrderStatus.ACCEPTED || order.status == OrderStatus.ARRIVED) {
+                // ====== 撥打乘客 + 開始導航 按鈕列 ======
+                if (currentOrder.status in listOf(
+                        OrderStatus.ACCEPTED, OrderStatus.ARRIVED, OrderStatus.ON_TRIP
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // 撥打乘客
+                        val callPhone = currentOrder.passengerPhone ?: currentOrder.customerPhone
                         Button(
                             onClick = {
-                                val uri = Uri.parse(
-                                    "google.navigation:q=${order.pickup.latitude},${order.pickup.longitude}"
-                                )
-                                val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                                    setPackage("com.google.android.apps.maps")
-                                }
-                                try {
+                                callPhone?.let { phone ->
+                                    val intent = Intent(Intent.ACTION_DIAL).apply {
+                                        data = Uri.parse("tel:$phone")
+                                    }
                                     context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "請先安裝Google Maps", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF1976D2)
-                            )
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = ActionBlue),
+                            shape = RoundedCornerShape(12.dp),
+                            enabled = callPhone != null
                         ) {
-                            Text("🗺️ 開始導航到上車點")
+                            Icon(
+                                imageVector = Icons.Default.Phone,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("撥打乘客", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // 開始導航
+                        Button(
+                            onClick = {
+                                val navTarget = if (currentOrder.status == OrderStatus.ON_TRIP) {
+                                    currentOrder.destination?.let { dest ->
+                                        "google.navigation:q=${dest.latitude},${dest.longitude}"
+                                    }
+                                } else {
+                                    "google.navigation:q=${currentOrder.pickup.latitude},${currentOrder.pickup.longitude}"
+                                }
+                                navTarget?.let { target ->
+                                    val uri = Uri.parse(target)
+                                    val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                        setPackage("com.google.android.apps.maps")
+                                    }
+                                    try {
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "請先安裝Google Maps", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = ActionBlue),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Navigation,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("開始導航", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
 
-                    // 訂單操作按鈕
-                    when (order.status) {
+                    // 語音對講按鈕
+                    if (viewModel.canUseVoiceChat()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            MiniVoiceChatButton(
+                                onClick = { viewModel.showVoiceChatPanel() },
+                                hasUnread = voiceChatUnreadCount > 0
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                // ====== 訂單操作按鈕 ======
+                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    when (currentOrder.status) {
                         OrderStatus.OFFERED -> {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 OutlinedButton(
                                     onClick = {
-                                        viewModel.rejectOrder(order.orderId, driverId)
+                                        viewModel.rejectOrder(currentOrder.orderId, driverId)
                                     },
-                                    modifier = Modifier.weight(1f),
-                                    enabled = !uiState.isLoading
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(56.dp),
+                                    enabled = !uiState.isLoading,
+                                    shape = RoundedCornerShape(12.dp)
                                 ) {
-                                    Text("拒絕")
+                                    Text("拒絕", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                 }
                                 Button(
                                     onClick = {
-                                        viewModel.acceptOrder(order.orderId, driverId, driverName)
+                                        viewModel.acceptOrder(currentOrder.orderId, driverId, driverName)
                                     },
-                                    modifier = Modifier.weight(1f),
-                                    enabled = !uiState.isLoading
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(56.dp),
+                                    enabled = !uiState.isLoading,
+                                    colors = ButtonDefaults.buttonColors(containerColor = ButtonActiveGreen),
+                                    shape = RoundedCornerShape(12.dp)
                                 ) {
                                     if (uiState.isLoading) {
                                         CircularProgressIndicator(
-                                            modifier = Modifier.size(20.dp),
-                                            color = MaterialTheme.colorScheme.onPrimary
+                                            modifier = Modifier.size(24.dp),
+                                            color = Color.White
                                         )
                                     } else {
-                                        Text("接受")
+                                        Text("接受訂單", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -592,118 +714,133 @@ fun HomeScreen(
 
                         OrderStatus.ACCEPTED -> {
                             Button(
-                                onClick = { viewModel.markArrived(order.orderId) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !uiState.isLoading
+                                onClick = { viewModel.markArrived(currentOrder.orderId) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                enabled = !uiState.isLoading,
+                                colors = ButtonDefaults.buttonColors(containerColor = ButtonActiveGreen),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text("已到達上車點")
+                                Text("已到達上車點", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
                         OrderStatus.ARRIVED -> {
                             Button(
-                                onClick = { viewModel.startTrip(order.orderId) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !uiState.isLoading
+                                onClick = { viewModel.startTrip(currentOrder.orderId) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                enabled = !uiState.isLoading,
+                                colors = ButtonDefaults.buttonColors(containerColor = ButtonActiveGreen),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text("開始行程")
+                                Text("開始行程", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
                         OrderStatus.ON_TRIP -> {
                             Button(
-                                onClick = { viewModel.endTrip(order.orderId) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !uiState.isLoading
+                                onClick = { viewModel.endTrip(currentOrder.orderId) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                enabled = !uiState.isLoading,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text("結束行程")
+                                Text("結束行程", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
                         OrderStatus.SETTLING -> {
                             Button(
                                 onClick = {
-                                    currentOrderIdForFare = order.orderId
+                                    currentOrderIdForFare = currentOrder.orderId
                                     showFareDialog = true
                                 },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !uiState.isLoading
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                enabled = !uiState.isLoading,
+                                colors = ButtonDefaults.buttonColors(containerColor = StatusOrange),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text("提交車資")
+                                Text("提交車資", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
                         else -> {}
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
-        }
+                Spacer(modifier = Modifier.height(12.dp))
 
-        uiState.queuedOrder?.let { order ->
-            QueuedOrderCard(
-                order = order,
-                driverId = driverId,
-                driverName = driverName,
-                isLoading = uiState.isLoading,
-                onAccept = { viewModel.acceptOrder(order.orderId, driverId, driverName) },
-                onReject = { viewModel.rejectOrder(order.orderId, driverId) }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        // 狀態切換按鈕
-        StatusControlButtons(
-            currentStatus = uiState.driverStatus,
-            onStatusChange = { newStatus ->
-                viewModel.updateDriverStatus(driverId, newStatus)
-            }
-        )
-    }
-
-    // 車資對話框
-    if (showFareDialog) {
-        FareDialog(
-            onDismiss = { showFareDialog = false },
-            onConfirm = { meterAmount, photoUri ->
-                currentOrderIdForFare?.let { orderId ->
-                    // TODO: 未來實作照片上傳功能
-                    viewModel.submitFare(orderId, driverId, meterAmount)
+                // ====== 下一單預覽 ======
+                uiState.queuedOrder?.let { queuedOrder ->
+                    QueuedOrderCard(
+                        order = queuedOrder,
+                        driverId = driverId,
+                        driverName = driverName,
+                        isLoading = uiState.isLoading,
+                        onAccept = { viewModel.acceptOrder(queuedOrder.orderId, driverId, driverName) },
+                        onReject = { viewModel.rejectOrder(queuedOrder.orderId, driverId) },
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
-                showFareDialog = false
-                currentOrderIdForFare = null
-            }
-        )
-    }
 
-    // 評分對話框 - 訂單完成後顯示
-    uiState.pendingRating?.let { pendingRating ->
-        RatingDialog(
-            title = "評價乘客",
-            targetName = pendingRating.passengerName,
-            isDriver = false,
-            onDismiss = { viewModel.skipRating() },
-            onSubmit = { rating, comment ->
-                viewModel.submitRating(driverId, rating, comment)
-            }
-        )
-    }
+                // ====== 底部狀態指示器（不可點擊）======
+                StatusIndicatorBar(
+                    status = uiState.driverStatus,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
 
-        // 語音監聽指示器（新訂單語音接單時顯示）
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+
+        // ====== 車資對話框 ======
+        if (showFareDialog) {
+            FareDialog(
+                onDismiss = { showFareDialog = false },
+                onConfirm = { meterAmount, photoUri ->
+                    currentOrderIdForFare?.let { orderId ->
+                        viewModel.submitFare(orderId, driverId, meterAmount)
+                    }
+                    showFareDialog = false
+                    currentOrderIdForFare = null
+                }
+            )
+        }
+
+        // ====== 評分對話框 ======
+        uiState.pendingRating?.let { pendingRating ->
+            RatingDialog(
+                title = "評價乘客",
+                targetName = pendingRating.passengerName,
+                isDriver = false,
+                onDismiss = { viewModel.skipRating() },
+                onSubmit = { rating, comment ->
+                    viewModel.submitRating(driverId, rating, comment)
+                }
+            )
+        }
+
+        // ====== 語音監聽指示器 ======
         AnimatedVisibility(
             visible = uiState.isVoiceListening,
             enter = fadeIn() + slideInVertically { -it },
             exit = fadeOut() + slideOutVertically { -it },
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 60.dp)
+                .padding(top = 80.dp)
         ) {
             VoiceListeningIndicator()
         }
 
-        // 語音對講面板
+        // ====== 語音對講面板 ======
         if (showVoiceChatPanel) {
             VoiceChatPanel(
                 messages = voiceChatHistory,
@@ -715,13 +852,337 @@ fun HomeScreen(
                 onStopRecording = { viewModel.stopVoiceChatRecording() },
                 onClose = { viewModel.hideVoiceChatPanel() },
                 enabled = viewModel.canUseVoiceChat(),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
-    } // 關閉 Box
+    }
 }
 
+// ================================================================
+// 新 UI 組件
+// ================================================================
+
+/**
+ * 藍色漸層頂部欄
+ */
+@Composable
+private fun NewTopBar(title: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(HeaderGradientStart, HeaderGradientEnd)
+                )
+            )
+            .padding(horizontal = 16.dp, vertical = 16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.ArrowBack,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+/**
+ * 今日統計欄
+ */
+@Composable
+private fun NewStatsBar(
+    status: DriverAvailability,
+    orderCount: Int,
+    earnings: Int,
+    distance: Double,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // 狀態行
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "今日",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = DarkText
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when (status) {
+                                DriverAvailability.AVAILABLE -> StatusGreen
+                                DriverAvailability.REST -> StatusOrange
+                                DriverAvailability.ON_TRIP -> StatusBlue
+                                DriverAvailability.OFFLINE -> StatusGray
+                            }
+                        )
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = when (status) {
+                        DriverAvailability.AVAILABLE -> "可接單中"
+                        DriverAvailability.REST -> "休息中"
+                        DriverAvailability.ON_TRIP -> "載客中"
+                        DriverAvailability.OFFLINE -> "已離線"
+                    },
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = when (status) {
+                        DriverAvailability.AVAILABLE -> StatusGreen
+                        DriverAvailability.REST -> StatusOrange
+                        DriverAvailability.ON_TRIP -> StatusBlue
+                        DriverAvailability.OFFLINE -> StatusGray
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 統計行
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "${orderCount}單",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DarkText
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(24.dp)
+                        .background(Color(0xFFE0E0E0))
+                )
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "$earnings",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DarkText
+                    )
+                    Text(
+                        text = "收入",
+                        fontSize = 12.sp,
+                        color = SubText
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(24.dp)
+                        .background(Color(0xFFE0E0E0))
+                )
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "${String.format("%.1f", distance)}公里",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DarkText
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 2x2 狀態按鈕網格（無訂單時顯示）
+ */
+@Composable
+private fun NewStatusGrid(
+    currentStatus: DriverAvailability,
+    onStatusChange: (DriverAvailability) -> Unit,
+    onNavigateToOrders: (() -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // 上排：離線 + 休息
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            StatusGridButton(
+                label = "離線",
+                isActive = currentStatus == DriverAvailability.OFFLINE,
+                activeColor = Color(0xFF78909C),
+                onClick = { onStatusChange(DriverAvailability.OFFLINE) },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            )
+            StatusGridButton(
+                label = "休息",
+                isActive = currentStatus == DriverAvailability.REST,
+                activeColor = StatusOrange,
+                onClick = { onStatusChange(DriverAvailability.REST) },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            )
+        }
+
+        // 下排：可接單 + 訂單
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            StatusGridButton(
+                label = "可接單",
+                isActive = currentStatus == DriverAvailability.AVAILABLE,
+                activeColor = ButtonActiveGreen,
+                showCheckmark = currentStatus == DriverAvailability.AVAILABLE,
+                onClick = { onStatusChange(DriverAvailability.AVAILABLE) },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            )
+            StatusGridButton(
+                label = "訂單",
+                isActive = false,
+                activeColor = ActionBlue,
+                onClick = { onNavigateToOrders?.invoke() },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            )
+        }
+    }
+}
+
+/**
+ * 單個網格按鈕
+ */
+@Composable
+private fun StatusGridButton(
+    label: String,
+    isActive: Boolean,
+    activeColor: Color,
+    showCheckmark: Boolean = false,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isActive) activeColor else Color.White
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                if (showCheckmark) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Text(
+                    text = label,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isActive) Color.White else DarkText
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 底部狀態指示器（不可點擊，僅顯示當前狀態）
+ */
+@Composable
+private fun StatusIndicatorBar(
+    status: DriverAvailability,
+    modifier: Modifier = Modifier
+) {
+    val bgColor = when (status) {
+        DriverAvailability.AVAILABLE -> ButtonActiveGreen
+        DriverAvailability.ON_TRIP -> StatusBlue
+        DriverAvailability.REST -> StatusOrange
+        DriverAvailability.OFFLINE -> StatusGray
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = bgColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = when (status) {
+                    DriverAvailability.AVAILABLE -> "可接單"
+                    DriverAvailability.ON_TRIP -> "載客中"
+                    DriverAvailability.REST -> "休息中"
+                    DriverAvailability.OFFLINE -> "已離線"
+                },
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "目前狀態",
+                fontSize = 14.sp,
+                color = Color.White.copy(alpha = 0.8f)
+            )
+        }
+    }
+}
+
+/**
+ * 下一單預覽卡片
+ */
 @Composable
 private fun QueuedOrderCard(
     order: Order,
@@ -729,7 +1190,8 @@ private fun QueuedOrderCard(
     driverName: String,
     isLoading: Boolean,
     onAccept: () -> Unit,
-    onReject: () -> Unit
+    onReject: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val handoverMinutes = remember(order.predictedHandoverAt) {
         order.predictedHandoverAt?.let {
@@ -738,8 +1200,9 @@ private fun QueuedOrderCard(
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.tertiaryContainer
         )
@@ -755,7 +1218,7 @@ private fun QueuedOrderCard(
                 Column {
                     Text(
                         text = "🧾 下一單",
-                        style = MaterialTheme.typography.titleMedium,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
@@ -764,7 +1227,7 @@ private fun QueuedOrderCard(
                             OrderStatus.QUEUED -> "已預掛"
                             else -> order.status.getDisplayName()
                         },
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
                     )
                 }
@@ -780,7 +1243,7 @@ private fun QueuedOrderCard(
                         },
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         color = order.status.getColor(),
-                        style = MaterialTheme.typography.labelLarge,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -791,7 +1254,7 @@ private fun QueuedOrderCard(
             order.queuedAfterOrderId?.let { previousOrderId ->
                 Text(
                     text = "接在前單後：$previousOrderId",
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
@@ -800,7 +1263,7 @@ private fun QueuedOrderCard(
             handoverMinutes?.let { minutes ->
                 Text(
                     text = if (minutes == 0) "預估可立即交接" else "預估約 $minutes 分鐘後接手",
-                    style = MaterialTheme.typography.bodyMedium,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onTertiaryContainer
                 )
@@ -809,26 +1272,30 @@ private fun QueuedOrderCard(
 
             Text(
                 text = "上車點",
-                style = MaterialTheme.typography.labelMedium,
+                fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
             )
             Text(
                 text = order.pickup.address ?: "未提供地址",
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
 
             order.destination?.let { destination ->
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "目的地",
-                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
                 )
                 Text(
                     text = destination.address ?: "未提供地址",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -841,13 +1308,13 @@ private fun QueuedOrderCard(
                     order.etaToPickup?.let { eta ->
                         Text(
                             text = "到客人約 $eta 分鐘",
-                            style = MaterialTheme.typography.bodyMedium
+                            fontSize = 14.sp
                         )
                     }
                     order.estimatedFare?.let { fare ->
                         Text(
                             text = "預估 NT$ $fare",
-                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -867,15 +1334,21 @@ private fun QueuedOrderCard(
                 ) {
                     OutlinedButton(
                         onClick = onReject,
-                        modifier = Modifier.weight(1f),
-                        enabled = !isLoading
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        enabled = !isLoading,
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("拒絕下一單")
+                        Text("拒絕下一單", fontSize = 16.sp)
                     }
                     Button(
                         onClick = onAccept,
-                        modifier = Modifier.weight(1f),
-                        enabled = !isLoading
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        enabled = !isLoading,
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         if (isLoading) {
                             CircularProgressIndicator(
@@ -883,7 +1356,7 @@ private fun QueuedOrderCard(
                                 color = MaterialTheme.colorScheme.onPrimary
                             )
                         } else {
-                            Text("接受下一單")
+                            Text("接受下一單", fontSize = 16.sp)
                         }
                     }
                 }
@@ -891,7 +1364,7 @@ private fun QueuedOrderCard(
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = "前單若取消或完成，系統會重新計算是否直接交接給您。",
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
                 )
             }
@@ -900,160 +1373,7 @@ private fun QueuedOrderCard(
 }
 
 /**
- * 司機狀態卡片
- */
-@Composable
-fun DriverStatusCard(
-    driverStatus: DriverAvailability,
-    driverName: String
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = when (driverStatus) {
-                DriverAvailability.OFFLINE -> MaterialTheme.colorScheme.surfaceVariant
-                DriverAvailability.REST -> MaterialTheme.colorScheme.tertiaryContainer
-                DriverAvailability.AVAILABLE -> MaterialTheme.colorScheme.primaryContainer
-                DriverAvailability.ON_TRIP -> MaterialTheme.colorScheme.secondaryContainer
-            }
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "目前狀態",
-                style = MaterialTheme.typography.labelMedium
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = when (driverStatus) {
-                    DriverAvailability.OFFLINE -> "🔴 離線"
-                    DriverAvailability.REST -> "🟡 休息中"
-                    DriverAvailability.AVAILABLE -> "🟢 可接單"
-                    DriverAvailability.ON_TRIP -> "🔵 載客中"
-                },
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = driverName,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-/**
- * 今日統計卡片
- */
-@Composable
-fun TodayStatsCard(
-    orderCount: Int,
-    earnings: Int,
-    distance: Double
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "📊 今日統計",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                StatItem(label = "訂單數", value = "$orderCount")
-                StatItem(label = "收入", value = "NT$ $earnings")
-                StatItem(label = "里程", value = "${String.format("%.1f", distance)} km")
-            }
-        }
-    }
-}
-
-/**
- * 統計項目
- */
-@Composable
-fun StatItem(label: String, value: String) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-/**
- * 狀態控制按鈕
- */
-@Composable
-fun StatusControlButtons(
-    currentStatus: DriverAvailability,
-    onStatusChange: (DriverAvailability) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        OutlinedButton(
-            onClick = { onStatusChange(DriverAvailability.OFFLINE) },
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = if (currentStatus == DriverAvailability.OFFLINE)
-                    MaterialTheme.colorScheme.surfaceVariant
-                else Color.Transparent
-            )
-        ) {
-            Text("離線")
-        }
-
-        OutlinedButton(
-            onClick = { onStatusChange(DriverAvailability.REST) },
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = if (currentStatus == DriverAvailability.REST)
-                    MaterialTheme.colorScheme.tertiaryContainer
-                else Color.Transparent
-            )
-        ) {
-            Text("休息")
-        }
-
-        Button(
-            onClick = { onStatusChange(DriverAvailability.AVAILABLE) },
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (currentStatus == DriverAvailability.AVAILABLE)
-                    MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.primaryContainer
-            )
-        ) {
-            Text("可接單")
-        }
-    }
-}
-
-/**
  * 語音監聽指示器
- * 當系統正在等待司機語音輸入時顯示
  */
 @Composable
 fun VoiceListeningIndicator() {
@@ -1087,7 +1407,7 @@ fun VoiceListeningIndicator() {
             Text(
                 text = "聆聽中...",
                 color = Color.White,
-                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Medium
             )
         }

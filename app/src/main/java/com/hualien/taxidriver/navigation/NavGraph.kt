@@ -73,7 +73,16 @@ fun MainNavigation(
             composable(Screen.Home.route) {
                 HomeScreen(
                     driverId = driverId,
-                    driverName = driverName
+                    driverName = driverName,
+                    onNavigateToOrders = {
+                        navController.navigate(Screen.Orders.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
                 )
             }
             composable(Screen.Orders.route) {

@@ -28,14 +28,14 @@ android {
         applicationId = "com.hualien.taxidriver"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.0.0-beta6"
+        versionCode = 11
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // BuildConfig設定
-        buildConfigField("String", "SERVER_URL", "\"http://15.164.245.47/api/\"")
-        buildConfigField("String", "WS_URL", "\"http://15.164.245.47\"")
+        buildConfigField("String", "SERVER_URL", "\"https://api.hualientaxi.taxi/api/\"")
+        buildConfigField("String", "WS_URL", "\"https://api.hualientaxi.taxi\"")
     }
 
     // Signing 配置
@@ -52,7 +52,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

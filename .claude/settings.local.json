@@ -38,7 +38,8 @@
       "Bash(nc:*)",
       "Bash(cd:*)",
       "WebFetch(domain:community.asterisk.org)",
-      "WebFetch(domain:www.voip-info.org)"
+      "WebFetch(domain:www.voip-info.org)",
+      "Bash(npx tsc:*)"
     ],
     "deny": [],
     "ask": []
