@@ -238,6 +238,34 @@ interface ApiService {
         @Path("driverId") driverId: String
     ): Response<AutoAcceptStatsResponse>
 
+    // ==================== 電話審核相關（司機客服）====================
+
+    /**
+     * 取得待審核電話列表
+     */
+    @GET("drivers/{driverId}/phone-reviews")
+    suspend fun getPhoneReviews(
+        @Path("driverId") driverId: String
+    ): Response<PhoneReviewListResponse>
+
+    /**
+     * 取得待審核數量
+     */
+    @GET("drivers/{driverId}/phone-reviews/count")
+    suspend fun getPhoneReviewCount(
+        @Path("driverId") driverId: String
+    ): Response<PhoneReviewCountResponse>
+
+    /**
+     * 審核電話（核准/拒絕）
+     */
+    @POST("drivers/{driverId}/phone-reviews/{callId}")
+    suspend fun submitPhoneReview(
+        @Path("driverId") driverId: String,
+        @Path("callId") callId: String,
+        @Body request: PhoneReviewRequest
+    ): Response<PhoneReviewActionResponse>
+
     // ==================== 配置相關 ====================
 
     /**

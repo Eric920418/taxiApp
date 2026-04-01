@@ -31,6 +31,7 @@ sealed class Screen(
     // 司機端設定路由
     object AutoAcceptSettings : Screen("auto_accept_settings", "AI自動接單", Icons.Default.Star)
     object AccessibilitySettings : Screen("accessibility_settings", "無障礙設定", Icons.Default.Settings)
+    object PhoneReview : Screen("phone_review", "電話客服", Icons.Default.Phone)
 
     // 通用路由
     object RoleSelection : Screen("role_selection", "角色選擇", Icons.Default.Settings)

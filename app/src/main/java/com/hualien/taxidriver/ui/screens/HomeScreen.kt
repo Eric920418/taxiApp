@@ -46,6 +46,7 @@ import com.hualien.taxidriver.ui.components.OrderTagRow
 import com.hualien.taxidriver.ui.components.VoiceChatPanel
 import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
+import com.hualien.taxidriver.viewmodel.PhoneReviewViewModel
 
 // ====== 新 UI 顏色定義 ======
 private val HeaderGradientStart = Color(0xFF1976D2)
@@ -70,10 +71,18 @@ fun HomeScreen(
     driverId: String,
     driverName: String,
     viewModel: HomeViewModel = viewModel(),
-    onNavigateToOrders: (() -> Unit)? = null
+    onNavigateToOrders: (() -> Unit)? = null,
+    onNavigateToPhoneReview: (() -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+
+    // 電話客服審核
+    val phoneReviewVm: PhoneReviewViewModel = viewModel()
+    val phoneReviewState by phoneReviewVm.uiState.collectAsState()
+    LaunchedEffect(driverId) {
+        phoneReviewVm.loadReviewCount(driverId)
+    }
 
     // 語音對講狀態
     val voiceChatHistory by viewModel.voiceChatHistory.collectAsState()
@@ -188,6 +197,50 @@ fun HomeScreen(
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                // 電話客服審核提示
+                if (phoneReviewState.reviewCount > 0 && onNavigateToPhoneReview != null) {
+                    Card(
+                        onClick = { onNavigateToPhoneReview() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Phone,
+                                contentDescription = null,
+                                tint = Color(0xFFFF9800),
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "${phoneReviewState.reviewCount} 通電話需要人工處理",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    "AI 辨識不了，點擊幫忙處理",
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF757575)
+                                )
+                            }
+                            Icon(
+                                Icons.Default.ArrowForward,
+                                contentDescription = null,
+                                tint = Color(0xFF1976D2)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
 
                 NewStatusGrid(
                     currentStatus = uiState.driverStatus,

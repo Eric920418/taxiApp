@@ -82,6 +82,9 @@ fun MainNavigation(
                             launchSingleTop = true
                             restoreState = true
                         }
+                    },
+                    onNavigateToPhoneReview = {
+                        navController.navigate(Screen.PhoneReview.route)
                     }
                 )
             }
@@ -118,6 +121,14 @@ fun MainNavigation(
             // 無障礙設定
             composable(Screen.AccessibilitySettings.route) {
                 AccessibilitySettingsScreen(
+                    onBackClick = { navController.popBackStack() }
+                )
+            }
+
+            // 電話客服審核
+            composable(Screen.PhoneReview.route) {
+                PhoneReviewScreen(
+                    driverId = driverId,
                     onBackClick = { navController.popBackStack() }
                 )
             }
