@@ -1575,7 +1575,13 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
 
         viewModelScope.launch {
             try {
-                if (isStreetAddress(destinationQuery)) {
+                // ★ 第一層：本地地標 DB 快速比對（跳過 Google API）
+                val localResult = com.hualien.taxidriver.service.HualienLocalAddressDB.lookup(destinationQuery)
+                if (localResult != null && localResult.confidence >= 0.85) {
+                    android.util.Log.d(TAG, "本地地標命中: ${localResult.matchedAlias} → ${localResult.landmark.name} (${localResult.matchType}, confidence=${localResult.confidence})")
+                    val localDetails = com.hualien.taxidriver.service.HualienLocalAddressDB.toPlaceDetails(localResult)
+                    setPendingDestination(localDetails)
+                } else if (isStreetAddress(destinationQuery)) {
                     // 街道地址 → 優先使用 Geocoder API
                     android.util.Log.d(TAG, "偵測為街道地址，使用 Geocoder")
                     val geocoderResult = resolveStreetAddress(destinationQuery)

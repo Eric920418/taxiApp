@@ -5,7 +5,6 @@ import android.util.Log
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.libraries.places.api.Places
 import com.google.android.libraries.places.api.model.AutocompleteSessionToken
-import com.google.android.libraries.places.api.model.LocationBias
 import com.google.android.libraries.places.api.model.Place
 import com.google.android.libraries.places.api.model.RectangularBounds
 import com.google.android.libraries.places.api.net.FetchPlaceRequest
@@ -22,7 +21,6 @@ import kotlin.coroutines.resumeWithException
 class PlacesApiService(context: Context) {
 
     private val placesClient: PlacesClient
-    private val sessionToken: AutocompleteSessionToken = AutocompleteSessionToken.newInstance()
 
     companion object {
         private const val TAG = "PlacesApiService"
@@ -70,8 +68,11 @@ class PlacesApiService(context: Context) {
                 return@suspendCancellableCoroutine
             }
 
+            // 每次搜尋都建立新的 session token，避免連續不同搜尋被 Google 合併
+            val currentToken = AutocompleteSessionToken.newInstance()
+
             val requestBuilder = FindAutocompletePredictionsRequest.builder()
-                .setSessionToken(sessionToken)
+                .setSessionToken(currentToken)
                 .setQuery(query)
                 .setCountries(listOf("TW"))  // 限制在台灣
                 .setLocationRestriction(HUALIEN_BOUNDS)  // 嚴格限制在花蓮範圍（不只是偏好）

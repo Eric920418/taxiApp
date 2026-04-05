@@ -102,6 +102,7 @@ fun HomeScreen(
 
     // 車資對話框狀態
     var showFareDialog by remember { mutableStateOf(false) }
+    var fareDialogInitialAmount by remember { mutableStateOf<Int?>(null) }
     var currentOrderIdForFare by remember { mutableStateOf<String?>(null) }
 
     // 位置權限和錄音權限
@@ -302,6 +303,20 @@ fun HomeScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = DarkText
                                 )
+                                // 訂單來源標示
+                                if (currentOrder.source != null) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "- ${currentOrder.getSourceDisplayName()}",
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = when (currentOrder.source) {
+                                            "LINE" -> Color(0xFF00C300)
+                                            "PHONE" -> Color(0xFFFF8C00)
+                                            else -> StatusBlue
+                                        }
+                                    )
+                                }
                             }
                             Surface(
                                 color = when (currentOrder.status) {
@@ -478,8 +493,10 @@ fun HomeScreen(
                                                 fontWeight = FontWeight.Bold,
                                                 color = DarkText
                                             )
-                                            currentOrder.etaToPickup?.let { eta ->
-                                                Text("約 $eta 分鐘", fontSize = 12.sp, color = SubText)
+                                            // ETA：優先用 googleEtaSeconds（更精確），fallback 到 etaToPickup
+                                            val etaMinutes = currentOrder.googleEtaSeconds?.let { it / 60 } ?: currentOrder.etaToPickup
+                                            etaMinutes?.let { eta ->
+                                                Text("約 $eta 分鐘到", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = StatusBlue)
                                             }
                                         }
                                     }
@@ -728,7 +745,7 @@ fun HomeScreen(
                         OrderStatus.OFFERED -> {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                horizontalArrangement = Arrangement.spacedBy(24.dp)
                             ) {
                                 OutlinedButton(
                                     onClick = {
@@ -736,19 +753,20 @@ fun HomeScreen(
                                     },
                                     modifier = Modifier
                                         .weight(1f)
-                                        .height(56.dp),
+                                        .height(72.dp),
                                     enabled = !uiState.isLoading,
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFE53935))
                                 ) {
-                                    Text("拒絕", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text("拒絕", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE53935))
                                 }
                                 Button(
                                     onClick = {
                                         viewModel.acceptOrder(currentOrder.orderId, driverId, driverName)
                                     },
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .height(56.dp),
+                                        .weight(1.5f)
+                                        .height(72.dp),
                                     enabled = !uiState.isLoading,
                                     colors = ButtonDefaults.buttonColors(containerColor = ButtonActiveGreen),
                                     shape = RoundedCornerShape(12.dp)
@@ -759,7 +777,7 @@ fun HomeScreen(
                                             color = Color.White
                                         )
                                     } else {
-                                        Text("接受訂單", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                        Text("接受訂單", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -811,6 +829,7 @@ fun HomeScreen(
                             Button(
                                 onClick = {
                                     currentOrderIdForFare = currentOrder.orderId
+                                    fareDialogInitialAmount = currentOrder.estimatedFare
                                     showFareDialog = true
                                 },
                                 modifier = Modifier
@@ -844,12 +863,6 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                // ====== 底部狀態指示器（不可點擊）======
-                StatusIndicatorBar(
-                    status = uiState.driverStatus,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
@@ -858,13 +871,15 @@ fun HomeScreen(
         if (showFareDialog) {
             FareDialog(
                 onDismiss = { showFareDialog = false },
-                onConfirm = { meterAmount, photoUri ->
+                onConfirm = { meterAmount, _ ->
                     currentOrderIdForFare?.let { orderId ->
                         viewModel.submitFare(orderId, driverId, meterAmount)
                     }
                     showFareDialog = false
                     currentOrderIdForFare = null
-                }
+                    fareDialogInitialAmount = null
+                },
+                initialAmount = fareDialogInitialAmount
             )
         }
 

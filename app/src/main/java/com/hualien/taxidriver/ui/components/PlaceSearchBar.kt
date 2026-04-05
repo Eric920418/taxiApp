@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.model.LatLng
+import com.hualien.taxidriver.service.HualienLocalAddressDB
 import com.hualien.taxidriver.service.PlacePrediction
 import com.hualien.taxidriver.service.PlacesApiService
 import kotlinx.coroutines.delay
@@ -64,14 +65,27 @@ fun PlaceSearchBar(
         isSearching = true
         coroutineScope.launch {
             try {
+                // ★ 第一層：本地地標 DB 快速比對
+                val localResult = HualienLocalAddressDB.lookup(query)
+                val localPredictions = if (localResult != null && localResult.confidence >= 0.75) {
+                    listOf(HualienLocalAddressDB.toPlacePrediction(localResult))
+                } else {
+                    emptyList()
+                }
+
+                // 第二層：Google Places API 補充結果
                 val result = placesService.searchPlaces(query, currentLocation)
-                result.onSuccess { list ->
-                    predictions = list
-                    showSuggestions = list.isNotEmpty()
+                result.onSuccess { googleList ->
+                    // 本地結果置頂，去除重複
+                    val localNames = localPredictions.map { it.primaryText }.toSet()
+                    val filtered = googleList.filter { it.primaryText !in localNames }
+                    predictions = localPredictions + filtered
+                    showSuggestions = predictions.isNotEmpty()
                 }
                 result.onFailure {
-                    predictions = emptyList()
-                    showSuggestions = false
+                    // Google 失敗時仍顯示本地結果
+                    predictions = localPredictions
+                    showSuggestions = localPredictions.isNotEmpty()
                 }
             } finally {
                 isSearching = false

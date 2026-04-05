@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.model.LatLng
+import com.hualien.taxidriver.service.HualienLocalAddressDB
 import com.hualien.taxidriver.service.PlaceDetails
 import com.hualien.taxidriver.service.PlacePrediction
 import com.hualien.taxidriver.service.PlacesApiService
@@ -93,19 +94,26 @@ fun PlaceSelectionDialog(
                     currentLocation = currentLocation,
                     initialQuery = initialQuery,
                     onPlaceSelected = { prediction ->
-                        // 獲取地點詳細資訊（包含座標）
                         coroutineScope.launch {
                             isLoadingDetails = true
                             try {
-                                val result = placesService.getPlaceDetails(prediction.placeId)
-                                result.onSuccess { details ->
-                                    details.latLng?.let { latLng ->
-                                        // 取得詳細地址
-                                        val fullAddress = details.address.ifEmpty {
-                                            prediction.fullText
-                                        }
+                                if (prediction.placeId.startsWith("local_")) {
+                                    // ★ 本地地標：直接從本地 DB 取座標，不呼叫 Google API
+                                    val localDetails = HualienLocalAddressDB.getDetailsByLocalId(prediction.placeId)
+                                    localDetails?.latLng?.let { latLng ->
+                                        val fullAddress = localDetails.address.ifEmpty { prediction.fullText }
                                         onPlaceSelected(latLng, fullAddress)
                                         onDismiss()
+                                    }
+                                } else {
+                                    // Google 地點：走原有 API 流程
+                                    val result = placesService.getPlaceDetails(prediction.placeId)
+                                    result.onSuccess { details ->
+                                        details.latLng?.let { latLng ->
+                                            val fullAddress = details.address.ifEmpty { prediction.fullText }
+                                            onPlaceSelected(latLng, fullAddress)
+                                            onDismiss()
+                                        }
                                     }
                                 }
                             } finally {
