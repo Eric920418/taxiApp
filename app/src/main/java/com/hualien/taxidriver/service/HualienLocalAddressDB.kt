@@ -556,6 +556,14 @@ object HualienLocalAddressDB {
             priority = 7
         ),
         LocalLandmark(
+            name = "中華電信花蓮服務中心",
+            lat = 23.9780, lng = 121.6080,
+            address = "花蓮縣花蓮市中正路595號",
+            category = "COMMERCIAL",
+            aliases = listOf("中華電信", "電信局", "花蓮中華電信", "中正路中華電信"),
+            priority = 6
+        ),
+        LocalLandmark(
             name = "好樂迪KTV花蓮店",
             lat = 24.0005, lng = 121.6130,
             address = "花蓮縣花蓮市國聯五路69號",

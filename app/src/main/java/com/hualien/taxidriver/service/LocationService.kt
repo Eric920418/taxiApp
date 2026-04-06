@@ -42,6 +42,7 @@ class LocationService : Service() {
     private var currentOrderId: String? = null  // 當前進行中的訂單ID，用於軌跡追蹤
     private var lastReportedLocation: Location? = null
     private var lastReportTime: Long = 0
+    private var lastWsConnectedTime: Long = System.currentTimeMillis()  // WebSocket 最後連線時間
     private var currentConfig: LocationConfig? = null
 
     // Coroutine scope for config updates
@@ -77,6 +78,22 @@ class LocationService : Service() {
 
                     // 檢查是否應該更新位置
                     if (shouldUpdateLocation(location, currentTime)) {
+                        // 檢查 WebSocket 連線狀態，斷線超過 2 分鐘則觸發重連
+                        if (webSocketManager.isConnected.value) {
+                            lastWsConnectedTime = currentTime
+                        } else {
+                            val disconnectedMs = currentTime - lastWsConnectedTime
+                            if (disconnectedMs > 120_000) { // 2 分鐘
+                                android.util.Log.w(TAG, "⚠️ WebSocket 斷線超過 ${disconnectedMs / 1000}s，觸發重連")
+                                driverId?.let { id ->
+                                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                        webSocketManager.connect(id)
+                                    }
+                                }
+                                lastWsConnectedTime = currentTime // 重置避免連續觸發
+                            }
+                        }
+
                         // 透過WebSocket回報位置（帶入訂單ID用於軌跡追蹤）
                         driverId?.let { id ->
                             webSocketManager.updateLocation(

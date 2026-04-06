@@ -700,19 +700,17 @@ class WebSocketManager private constructor() {
         // 取消之前的重連任務
         reconnectJob?.cancel()
 
-        // 檢查是否超過最大重連次數
-        if (currentReconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-            Log.e(TAG, "❌ 已達最大重連次數 ($MAX_RECONNECT_ATTEMPTS)，停止重連")
-            _reconnectState.value = ReconnectState.FAILED
-            return
+        // 無限重連：永不放棄，只有手動 disconnect 才停止
+        // 前 20 次快速重連（指數退避最大 60 秒），之後降頻為每 2 分鐘一次
+        val delay = if (currentReconnectAttempt < FAST_PHASE_ATTEMPTS) {
+            calculateReconnectDelay(currentReconnectAttempt)
+        } else {
+            SLOW_RECONNECT_DELAY  // 2 分鐘慢速重連
         }
-
-        // 計算指數退避延遲
-        val delay = calculateReconnectDelay(currentReconnectAttempt)
         currentReconnectAttempt++
 
         Log.d(TAG, "========== 智能重連調度 ==========")
-        Log.d(TAG, "重連次數: $currentReconnectAttempt / $MAX_RECONNECT_ATTEMPTS")
+        Log.d(TAG, "重連次數: $currentReconnectAttempt (${if (currentReconnectAttempt < FAST_PHASE_ATTEMPTS) "快速" else "慢速"}模式)")
         Log.d(TAG, "延遲時間: ${delay}ms")
         Log.d(TAG, "連接模式: $currentMode")
 
@@ -830,8 +828,9 @@ class WebSocketManager private constructor() {
 
         // 智能重連常數
         private const val BASE_RECONNECT_DELAY = 1000L    // 基礎延遲 1 秒
-        private const val MAX_RECONNECT_DELAY = 30000L    // 最大延遲 30 秒
-        private const val MAX_RECONNECT_ATTEMPTS = 15     // 最大重連次數
+        private const val MAX_RECONNECT_DELAY = 60000L    // 最大延遲 60 秒
+        private const val SLOW_RECONNECT_DELAY = 120000L  // 慢���重連 2 分鐘（5 分鐘後降頻）
+        private const val FAST_PHASE_ATTEMPTS = 20        // 前 20 次快���重連（約 5 分鐘內）
 
         @Volatile
         private var instance: WebSocketManager? = null

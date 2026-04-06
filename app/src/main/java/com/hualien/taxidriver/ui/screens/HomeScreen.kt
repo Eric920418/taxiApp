@@ -174,6 +174,10 @@ fun HomeScreen(
         }
     }
 
+    // ====== WebSocket 連線狀態監聽 ======
+    val wsManager = com.hualien.taxidriver.data.remote.WebSocketManager.getInstance()
+    val isWsConnected by wsManager.isConnected.collectAsState()
+
     // ====== UI 佈局 ======
     Box(modifier = Modifier.fillMaxSize()) {
         val currentOrder = uiState.currentOrder
@@ -185,6 +189,32 @@ fun HomeScreen(
                     .fillMaxSize()
                     .background(ScreenBackground)
             ) {
+                // 連線中斷警告橫幅
+                if (!isWsConnected && uiState.driverStatus != DriverAvailability.OFFLINE) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFD32F2F))
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "連線中斷，重新連接中...",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
                 NewTopBar(title = driverName)
 
                 Spacer(modifier = Modifier.height(12.dp))
