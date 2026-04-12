@@ -108,7 +108,10 @@ data class RideRequest(
     @SerializedName("tripDistanceMeters")
     val tripDistanceMeters: Int? = null,
     @SerializedName("estimatedFare")
-    val estimatedFare: Int? = null
+    val estimatedFare: Int? = null,
+    // 愛心卡/敬老卡補貼類型
+    @SerializedName("subsidyType")
+    val subsidyType: String = "NONE"
 )
 
 /**
@@ -213,6 +216,10 @@ data class OrderDto(
     val source: String? = null,
     @SerializedName("subsidyType")
     val subsidyType: String? = null,
+    @SerializedName("subsidyConfirmed")
+    val subsidyConfirmed: Boolean? = null,
+    @SerializedName("subsidyAmount")
+    val subsidyAmount: Int? = null,
     @SerializedName("petPresent")
     val petPresent: String? = null,
     @SerializedName("petCarrier")
@@ -315,6 +322,8 @@ data class OrderDto(
             assignmentMode = assignmentMode,
             source = source ?: "APP",
             subsidyType = subsidyType ?: "NONE",
+            subsidyConfirmed = subsidyConfirmed ?: false,
+            subsidyAmount = subsidyAmount ?: 0,
             petPresent = petPresent ?: "UNKNOWN",
             petCarrier = petCarrier ?: "UNKNOWN",
             petNote = petNote,

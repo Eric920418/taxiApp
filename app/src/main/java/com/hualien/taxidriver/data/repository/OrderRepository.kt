@@ -95,6 +95,33 @@ class OrderRepository {
     }
 
     /**
+     * 愛心卡確認/取消
+     */
+    suspend fun updateOrderSubsidy(
+        orderId: String,
+        driverId: String,
+        action: String // "CONFIRM" or "CANCEL"
+    ): Result<Order> {
+        return try {
+            val response = apiService.updateOrderSubsidy(
+                orderId = orderId,
+                request = com.hualien.taxidriver.data.remote.dto.UpdateSubsidyRequest(
+                    driverId = driverId,
+                    action = action
+                )
+            )
+
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!.toDomainOrder())
+            } else {
+                Result.failure(Exception("愛心卡操作失敗：${response.message()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("網路錯誤：${e.message}"))
+        }
+    }
+
+    /**
      * 提交車資
      */
     suspend fun submitFare(

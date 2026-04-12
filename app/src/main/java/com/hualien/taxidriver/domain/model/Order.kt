@@ -128,6 +128,14 @@ data class Order(
     @SerializedName("subsidyType")
     val subsidyType: String? = "NONE",
 
+    /** 司機是否已確認實體卡片 */
+    @SerializedName("subsidyConfirmed")
+    val subsidyConfirmed: Boolean = false,
+
+    /** 實際補貼金額（元） */
+    @SerializedName("subsidyAmount")
+    val subsidyAmount: Int = 0,
+
     /** 寵物攜帶：YES / NO / UNKNOWN */
     @SerializedName("petPresent")
     val petPresent: String? = "UNKNOWN",
@@ -277,6 +285,14 @@ data class Order(
         "PENDING" -> "待確認"
         else -> ""
     }
+
+    /** 是否為愛心卡訂單且尚未確認卡片 */
+    fun needsSubsidyConfirmation(): Boolean =
+        subsidyType == "LOVE_CARD" && !subsidyConfirmed
+
+    /** 是否為已確認的補貼訂單 */
+    fun hasConfirmedSubsidy(): Boolean =
+        subsidyType in listOf("LOVE_CARD", "SENIOR_CARD") && subsidyConfirmed
 
     /** 取得寵物狀態顯示名稱 */
     fun getPetDisplayName(): String = when {

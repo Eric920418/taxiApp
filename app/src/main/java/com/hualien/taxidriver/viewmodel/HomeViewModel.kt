@@ -672,6 +672,40 @@ class HomeViewModel : ViewModel() {
     }
 
     /**
+     * 確認愛心卡（司機已目視確認實體卡片）
+     */
+    fun confirmLoveCard(orderId: String, driverId: String) {
+        viewModelScope.launch {
+            android.util.Log.d("HomeViewModel", "確認愛心卡: $orderId")
+            repository.updateOrderSubsidy(orderId, driverId, "CONFIRM")
+                .onSuccess { updatedOrder ->
+                    _uiState.value = _uiState.value.copy(currentOrder = updatedOrder, error = null)
+                    android.util.Log.d("HomeViewModel", "愛心卡已確認")
+                }
+                .onFailure { err ->
+                    _uiState.value = _uiState.value.copy(error = "愛心卡確認失敗: ${err.message}")
+                }
+        }
+    }
+
+    /**
+     * 取消愛心卡（乘客無法出示卡片，改一般計費）
+     */
+    fun cancelLoveCard(orderId: String, driverId: String) {
+        viewModelScope.launch {
+            android.util.Log.d("HomeViewModel", "取消愛心卡: $orderId")
+            repository.updateOrderSubsidy(orderId, driverId, "CANCEL")
+                .onSuccess { updatedOrder ->
+                    _uiState.value = _uiState.value.copy(currentOrder = updatedOrder, error = null)
+                    android.util.Log.d("HomeViewModel", "愛心卡已取消，改為一般計費")
+                }
+                .onFailure { err ->
+                    _uiState.value = _uiState.value.copy(error = "取消愛心卡失敗: ${err.message}")
+                }
+        }
+    }
+
+    /**
      * 提交車資
      */
     fun submitFare(orderId: String, driverId: String, meterAmount: Int) {

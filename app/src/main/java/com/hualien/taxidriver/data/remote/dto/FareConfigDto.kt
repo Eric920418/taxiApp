@@ -31,5 +31,8 @@ data class FareConfigData(
     val nightStartHour: Int,         // 夜間開始時間
 
     @SerializedName("nightEndHour")
-    val nightEndHour: Int            // 夜間結束時間
+    val nightEndHour: Int,           // 夜間結束時間
+
+    @SerializedName("loveCardSubsidyAmount")
+    val loveCardSubsidyAmount: Int = 73  // 愛心卡每趟補貼金額（元）
 )

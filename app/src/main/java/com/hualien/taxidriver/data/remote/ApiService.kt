@@ -122,6 +122,15 @@ interface ApiService {
     ): Response<OrderDto>
 
     /**
+     * 愛心卡確認/取消
+     */
+    @PATCH("orders/{orderId}/subsidy")
+    suspend fun updateOrderSubsidy(
+        @Path("orderId") orderId: String,
+        @Body request: UpdateSubsidyRequest
+    ): Response<OrderDto>
+
+    /**
      * 上傳車資結算
      * 返回 OrderDto 來處理 ISO 8601 日期格式
      */

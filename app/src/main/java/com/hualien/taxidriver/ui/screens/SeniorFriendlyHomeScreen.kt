@@ -289,16 +289,19 @@ fun SeniorFriendlyHomeScreen(
 
     // 車資對話框
     if (showFareDialog) {
+        val currentOrder = uiState.currentOrder
         FareDialog(
             onDismiss = { showFareDialog = false },
             onConfirm = { meterAmount, photoUri ->
                 currentOrderIdForFare?.let { orderId ->
-                    // TODO: 未來實作照片上傳功能
                     viewModel.submitFare(orderId, driverId, meterAmount)
                 }
                 showFareDialog = false
                 currentOrderIdForFare = null
-            }
+            },
+            subsidyType = currentOrder?.subsidyType ?: "NONE",
+            subsidyConfirmed = currentOrder?.subsidyConfirmed ?: false,
+            subsidyAmount = com.hualien.taxidriver.utils.FareCalculator.loveCardSubsidyAmount
         )
     }
 

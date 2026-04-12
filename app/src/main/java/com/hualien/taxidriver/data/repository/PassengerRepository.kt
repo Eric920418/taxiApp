@@ -93,7 +93,8 @@ class PassengerRepository {
         destAddress: String? = null,
         paymentType: String = "CASH",
         tripDistanceMeters: Int? = null,
-        estimatedFare: Int? = null
+        estimatedFare: Int? = null,
+        subsidyType: String = "NONE"
     ): Result<RideRequestResult> {
         return try {
             val request = RideRequest(
@@ -108,7 +109,8 @@ class PassengerRepository {
                 destAddress = destAddress,
                 paymentType = paymentType,
                 tripDistanceMeters = tripDistanceMeters,
-                estimatedFare = estimatedFare
+                estimatedFare = estimatedFare,
+                subsidyType = subsidyType
             )
 
             android.util.Log.d("PassengerRepository", "========== API請求開始 ==========")

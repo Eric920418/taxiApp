@@ -42,6 +42,10 @@ object FareCalculator {
     private var currentConfig: FareConfig = defaultConfig
     private var configLoaded = false
 
+    /** 愛心卡每趟補貼金額（從 Server 載入） */
+    var loveCardSubsidyAmount: Int = 73
+        private set
+
     /**
      * 從 Server 取得費率配置並更新
      * 建議在 Application 或 MainActivity 啟動時呼叫
@@ -78,6 +82,7 @@ object FareCalculator {
             nightStartHour = serverConfig.nightStartHour,
             nightEndHour = serverConfig.nightEndHour
         )
+        loveCardSubsidyAmount = serverConfig.loveCardSubsidyAmount
         configLoaded = true
     }
 

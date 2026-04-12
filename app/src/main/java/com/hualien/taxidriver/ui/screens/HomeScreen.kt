@@ -899,6 +899,7 @@ fun HomeScreen(
 
         // ====== 車資對話框 ======
         if (showFareDialog) {
+            val currentOrder = uiState.currentOrder
             FareDialog(
                 onDismiss = { showFareDialog = false },
                 onConfirm = { meterAmount, _ ->
@@ -909,7 +910,10 @@ fun HomeScreen(
                     currentOrderIdForFare = null
                     fareDialogInitialAmount = null
                 },
-                initialAmount = fareDialogInitialAmount
+                initialAmount = fareDialogInitialAmount,
+                subsidyType = currentOrder?.subsidyType ?: "NONE",
+                subsidyConfirmed = currentOrder?.subsidyConfirmed ?: false,
+                subsidyAmount = com.hualien.taxidriver.utils.FareCalculator.loveCardSubsidyAmount
             )
         }
 

@@ -389,7 +389,9 @@ fun PassengerHomeScreen(
 
                         android.util.Log.d("PassengerHomeScreen", "已調用 requestTaxi，關閉底部面板")
                         showBottomSheet = false
-                    }
+                    },
+                    hasLoveCard = uiState.hasLoveCard,
+                    onToggleLoveCard = { viewModel.toggleLoveCard() }
                 )
             }
         }
@@ -919,7 +921,9 @@ fun AddressSelectionSheet(
     isCalculatingETA: Boolean,
     onPickupClick: () -> Unit,
     onDestinationClick: () -> Unit,
-    onCallTaxi: () -> Unit
+    onCallTaxi: () -> Unit,
+    hasLoveCard: Boolean = false,
+    onToggleLoveCard: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -1156,7 +1160,26 @@ fun AddressSelectionSheet(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 愛心卡勾選
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp)
+        ) {
+            Checkbox(
+                checked = hasLoveCard,
+                onCheckedChange = { onToggleLoveCard() }
+            )
+            Text(
+                text = "我有愛心卡",
+                style = MaterialTheme.typography.bodyLarge
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         // 叫車按鈕
         Button(

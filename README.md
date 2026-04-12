@@ -593,6 +593,8 @@ RECEIVED → DOWNLOADING → TRANSCRIBING → PARSING → [事件判定] → DIS
 |------|------|--------|
 | `source` | 來源（PHONE/APP/LINE） | APP |
 | `subsidyType` | 補貼類型（SENIOR_CARD/LOVE_CARD/PENDING/NONE） | NONE |
+| `subsidyConfirmed` | 司機是否已確認實體卡片 | false |
+| `subsidyAmount` | 實際補貼金額（元） | 0 |
 | `petPresent` | 是否有寵物（YES/NO/UNKNOWN） | UNKNOWN |
 | `petCarrier` | 是否有寵物籠（YES/NO/UNKNOWN） | UNKNOWN |
 | `customerPhone` | 來電號碼 | null |
@@ -605,12 +607,25 @@ RECEIVED → DOWNLOADING → TRANSCRIBING → PARSING → [事件判定] → DIS
 | 愛心卡 | `can_love_card` | 過濾無法刷愛心卡的司機 |
 | 寵物 | `can_pet` | 過濾不接受寵物的司機 |
 
+#### 愛心卡補貼流程
+
+三個入口（App/電話/LINE）都支援愛心卡：
+
+1. **乘客叫車時聲明**：App 端勾選「我有愛心卡」/ 電話端語音識別 / LINE bot
+2. **派單過濾**：SmartDispatcherV2 只派給 `can_love_card = TRUE` 的司機
+3. **司機到達確認**：`ArrivedAtPickup` 狀態顯示確認 UI，司機目視確認實體卡片
+   - 「已確認卡片」→ `PATCH /orders/:orderId/subsidy { action: "CONFIRM" }`
+   - 「乘客無卡」→ `PATCH /orders/:orderId/subsidy { action: "CANCEL" }` → 改一般計費
+4. **結帳拆帳**：FareDialog 顯示跳表金額、愛心卡補助扣減、乘客實付金額
+5. **補貼金額**：從 Server `FareConfigService` 動態載入（env: `LOVE_CARD_SUBSIDY_AMOUNT`，預設 NT$73）
+6. **補貼上限**：不超過跳表金額（`min(subsidyAmount, meterAmount)`）
+
 #### 訂單標籤 UI
 - **來源標籤**：電話(橙色)/LINE(綠色)，APP 不顯示
 - **補貼標籤**：敬老卡(紫色)/愛心卡(紅色)/待確認(黃色)
 - **寵物標籤**：有籠(綠色)/無籠(橙色)/有寵物(黃色)/待確認(灰色)
 
-標籤在 HomeScreen（普通版）和 SimplifiedDriverScreen（大字版）中均有顯示。
+標籤在 HomeScreen（普通版）和 SimplifiedDriverScreen（大字版）中均有顯示。APP 來源的愛心卡訂單也會顯示標籤。
 
 #### 目的地確認流程
 電話訂單的目的地由 GPT 從通話中提取，可能不準確。司機收到訂單後：

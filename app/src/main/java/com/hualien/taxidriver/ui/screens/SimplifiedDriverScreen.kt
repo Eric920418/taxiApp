@@ -315,7 +315,9 @@ fun SimplifiedDriverScreen(
             StatusDisplay(
                 orderState = orderState,
                 driverName = driverName,
-                driverStatus = uiState.driverStatus
+                driverStatus = uiState.driverStatus,
+                onConfirmLoveCard = { orderId -> viewModel.confirmLoveCard(orderId, driverId) },
+                onCancelLoveCard = { orderId -> viewModel.cancelLoveCard(orderId, driverId) }
             )
 
             // 中間：智能大按鈕
@@ -482,16 +484,19 @@ fun SimplifiedDriverScreen(
 
     // 車資對話框
     if (showFareDialog) {
+        val fareOrder = (orderState as? SmartOrderState.WaitingForPayment)?.order
         FareDialog(
             onDismiss = { showFareDialog = false },
             onConfirm = { meterAmount, photoUri ->
-                (orderState as? SmartOrderState.WaitingForPayment)?.let { state ->
-                    // TODO: 未來實作照片上傳功能
-                    viewModel.submitFare(state.order.orderId, driverId, meterAmount)
+                fareOrder?.let { order ->
+                    viewModel.submitFare(order.orderId, driverId, meterAmount)
                     smartOrderManager.completeOrder()
                 }
                 showFareDialog = false
-            }
+            },
+            subsidyType = fareOrder?.subsidyType ?: "NONE",
+            subsidyConfirmed = fareOrder?.subsidyConfirmed ?: false,
+            subsidyAmount = com.hualien.taxidriver.utils.FareCalculator.loveCardSubsidyAmount
         )
     }
 
@@ -516,7 +521,9 @@ fun SimplifiedDriverScreen(
 fun StatusDisplay(
     orderState: SmartOrderState,
     driverName: String,
-    driverStatus: DriverAvailability
+    driverStatus: DriverAvailability,
+    onConfirmLoveCard: (String) -> Unit = {},
+    onCancelLoveCard: (String) -> Unit = {}
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -615,7 +622,8 @@ fun StatusDisplay(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     // 訂單標籤（來源/補貼/寵物）
-                    if (orderState.order.source != null && orderState.order.source != "APP") {
+                    if (orderState.order.source != null && orderState.order.source != "APP" ||
+                        orderState.order.subsidyType != null && orderState.order.subsidyType != "NONE") {
                         OrderTagRowLarge(order = orderState.order)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
@@ -718,6 +726,76 @@ fun StatusDisplay(
                                 )
                             }
                         }
+                    }
+                }
+
+                is SmartOrderState.ArrivedAtPickup -> {
+                    val order = orderState.order
+                    // 愛心卡確認區塊
+                    if (order.subsidyType == "LOVE_CARD") {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        if (!order.subsidyConfirmed) {
+                            // 尚未確認 — 顯示確認/取消按鈕
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Color(0xFFFFF3E0)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "乘客聲明持有愛心卡",
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE65100)
+                                    )
+                                    Text(
+                                        text = "請確認乘客出示實體卡片",
+                                        fontSize = 16.sp,
+                                        color = Color(0xFF795548)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Button(
+                                            onClick = { onConfirmLoveCard(order.orderId) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFF4CAF50)
+                                            ),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("已確認卡片", fontSize = 16.sp)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { onCancelLoveCard(order.orderId) },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("乘客無卡", fontSize = 16.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // 已確認
+                            Text(
+                                text = "✓ 愛心卡已確認",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF4CAF50)
+                            )
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = driverName,
+                            fontSize = 22.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 

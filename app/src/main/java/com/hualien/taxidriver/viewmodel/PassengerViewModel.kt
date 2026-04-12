@@ -126,6 +126,9 @@ data class PassengerUiState(
     val etaAnnouncedHalfway: Boolean = false,               // 已廣播：一半距離
     val etaAnnouncedOneKm: Boolean = false,                 // 已廣播：剩餘 1 公里
 
+    // 愛心卡
+    val hasLoveCard: Boolean = false,
+
     // UI狀態
     val isLoading: Boolean = false,
     val error: String? = null
@@ -493,6 +496,13 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
+     * 切換愛心卡狀態
+     */
+    fun toggleLoveCard() {
+        _uiState.value = _uiState.value.copy(hasLoveCard = !_uiState.value.hasLoveCard)
+    }
+
+    /**
      * 發送叫車請求
      */
     fun requestTaxi(
@@ -542,7 +552,8 @@ class PassengerViewModel(application: Application) : AndroidViewModel(applicatio
                     destAddress = state.destinationAddress.takeIf { it.isNotEmpty() },
                     paymentType = "CASH",
                     tripDistanceMeters = state.routeInfo?.distanceMeters,
-                    estimatedFare = state.fareEstimate?.totalFare
+                    estimatedFare = state.fareEstimate?.totalFare,
+                    subsidyType = if (state.hasLoveCard) "LOVE_CARD" else "NONE"
                 )
 
                 result.onSuccess { rideResult ->
