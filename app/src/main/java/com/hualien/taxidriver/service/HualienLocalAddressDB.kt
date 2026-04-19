@@ -35,27 +35,77 @@ object HualienLocalAddressDB {
         val confidence: Double
     )
 
-    // ========== 索引 ==========
+    // ========== 索引（static 來自 hardcoded，dynamic 來自 Server 同步） ==========
 
     private val exactIndex = HashMap<String, LocalLandmark>()
     private val aliasIndex = HashMap<String, LocalLandmark>()
 
+    // Server 同步狀態
+    private var dynamicLandmarks: List<LocalLandmark> = emptyList()
+    private var deletedStaticNames: Set<String> = emptySet()
+
     init {
-        buildIndex()
+        rebuildIndex()
     }
 
-    private fun buildIndex() {
+    /**
+     * 重建記憶體索引：static（hardcoded）+ dynamic（Server 同步）
+     * Server 的地標同名時覆蓋 hardcoded；Server 軟刪除的 hardcoded 名稱會被排除。
+     * Server 連不上時，dynamic 為空、deletedStaticNames 為空 → 退化為純 static，離線 fallback。
+     */
+    @Synchronized
+    private fun rebuildIndex() {
+        val newExact = HashMap<String, LocalLandmark>()
+        val newAlias = HashMap<String, LocalLandmark>()
+
+        // 1. 先填 static（排除被 Server 刪除的 hardcoded 項）
         for (entry in LANDMARKS) {
-            exactIndex[entry.name] = entry
+            if (entry.name in deletedStaticNames) continue
+            newExact[entry.name] = entry
             for (alias in entry.aliases) {
-                val existing = aliasIndex[alias]
+                val existing = newAlias[alias]
                 if (existing == null || entry.priority > existing.priority) {
-                    aliasIndex[alias] = entry
+                    newAlias[alias] = entry
                 }
             }
         }
-        Log.d(TAG, "已建立索引：${LANDMARKS.size} 筆地標，${aliasIndex.size} 個別名")
+
+        // 2. 再填 dynamic（同名覆蓋 static）
+        for (entry in dynamicLandmarks) {
+            newExact[entry.name] = entry
+            for (alias in entry.aliases) {
+                val existing = newAlias[alias]
+                if (existing == null || entry.priority >= existing.priority) {
+                    newAlias[alias] = entry
+                }
+            }
+        }
+
+        exactIndex.clear()
+        exactIndex.putAll(newExact)
+        aliasIndex.clear()
+        aliasIndex.putAll(newAlias)
+
+        Log.d(
+            TAG,
+            "索引重建完成：${newExact.size} 筆（static=${LANDMARKS.size} dynamic=${dynamicLandmarks.size} deleted=${deletedStaticNames.size}）"
+        )
     }
+
+    /**
+     * 套用 Server 同步結果。由 LandmarkSyncRepository 呼叫。
+     */
+    @Synchronized
+    fun applyRemoteLandmarks(remote: List<LocalLandmark>, deletedNames: Set<String>) {
+        this.dynamicLandmarks = remote
+        this.deletedStaticNames = deletedNames
+        rebuildIndex()
+    }
+
+    /**
+     * 取得目前 dynamic 地標數（供 UI 顯示「已同步 N 筆」）
+     */
+    fun getDynamicCount(): Int = dynamicLandmarks.size
 
     // ========== 查詢方法 ==========
 

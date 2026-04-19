@@ -114,4 +114,13 @@ interface PassengerApiService {
         @Part("driverName") driverName: okhttp3.RequestBody?,
         @Part("driverPhone") driverPhone: okhttp3.RequestBody?
     ): Response<PassengerVoiceTranscribeResponse>
+
+    /**
+     * 同步地標清單（公開讀，不需 token）
+     * GET /api/landmarks/sync?since=<timestamp>
+     */
+    @GET("landmarks/sync")
+    suspend fun syncLandmarks(
+        @Query("since") since: String? = null
+    ): Response<LandmarkSyncResponse>
 }

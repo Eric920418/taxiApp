@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hualien.taxidriver.data.remote.RetrofitClient
+import com.hualien.taxidriver.data.repository.LandmarkSyncRepository
 import com.hualien.taxidriver.domain.model.UserRole
 import com.hualien.taxidriver.utils.FareCalculator
 import com.hualien.taxidriver.navigation.MainNavigation
@@ -63,6 +64,9 @@ class MainActivity : ComponentActivity() {
             // 從 Server 載入費率配置（失敗時使用預設值）
             FareCalculator.loadConfigFromServer()
         }
+
+        // 背景同步地標清單（失敗時沿用 hardcoded fallback，不阻斷啟動）
+        LandmarkSyncRepository(RetrofitClient.passengerApiService).syncInBackground()
 
         enableEdgeToEdge()
         setContent {

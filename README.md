@@ -1,7 +1,42 @@
 # 花蓮計程車 - 雙模式 Android App
 
 > **HualienTaxiDriver** - 司機端 + 乘客端統一應用程式
-> 版本：v1.9.2-MVP | 更新日期：2026-03-09
+> 版本：v1.10.0-MVP | 更新日期：2026-04-19
+
+## 📝 最新更新（2026-04-19）- 地標動態同步
+
+### 問題
+App 端 `HualienLocalAddressDB.kt`（97 筆 hardcoded）每次要加新地標（例如 commit 73cad31「好樂迪、三角形餐酒館」）都要改 Kotlin 重新發 APK，運營沒辦法自己維護。
+
+### 解法
+Admin Panel 新增「地標管理」頁面（Server 端改動），App 啟動時拉最新地標合併進本地索引：
+
+- **新增**：`data/repository/LandmarkSyncRepository.kt` — 啟動時呼叫 `GET /api/landmarks/sync`，fire-and-forget 不阻斷
+- **新增**：`data/remote/dto/LandmarkSyncDto.kt` — 回應 DTO
+- **修改**：`service/HualienLocalAddressDB.kt` — 加「靜態 + 動態」分層索引，新增 `applyRemoteLandmarks()` 原子替換；lookup 介面不變，呼叫方零改動
+- **修改**：`data/remote/PassengerApiService.kt` — 加 `syncLandmarks(since)` endpoint
+- **修改**：`MainActivity.kt` — `onCreate` 最後啟動背景同步
+
+### 關鍵設計
+- **hardcoded 永遠作為離線 fallback** — 斷網/首次啟動仍可用原 97 筆地標
+- **同名時 Server 版本 override** — Admin 修正的座標/別名會覆蓋 hardcoded（例如座標打錯修正）
+- **不刪 hardcoded** — Server 軟刪除不影響 hardcoded 那份
+- **零 UI 改動** — `lookup/getCoords/resolveAliases` 介面不變，舊程式直接受惠
+
+### 驗證
+```bash
+# 新增一個測試地標
+# Admin Panel → 地標管理 → 新增「測試館 ABC」
+
+# App 重啟
+adb logcat -s LandmarkSync   # 看到「同步完成：收到 N 筆」
+
+# App 斷網重啟仍可用 hardcoded
+```
+
+詳細 Server 端設計見 `~/Desktop/HualienTaxiServer/README.md` 最新修改章節。
+
+---
 
 ## 目錄
 
