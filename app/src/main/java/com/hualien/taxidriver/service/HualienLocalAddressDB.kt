@@ -206,8 +206,13 @@ object HualienLocalAddressDB {
     }
 
     // ========== 地標資料庫 ==========
-
-    private val LANDMARKS = listOf(
+    //
+    // 注意：用 by lazy 而非直接賦值，是因為 init block 位於此檔案頂部（line ~47）
+    // 但這個大 List 宣告在底部。Kotlin object 的 property initializer 按「源碼順序」
+    // 執行 — 若用 `val LANDMARKS = listOf(...)`，init block 先跑時 LANDMARKS 尚為
+    // null，會觸發 NPE → ExceptionInInitializerError → object 永遠無法載入 →
+    // 整個 App 閃退。by lazy 把初始化延後到第一次存取，解耦順序依賴。
+    private val LANDMARKS: List<LocalLandmark> by lazy { listOf(
 
         // ================================================
         // 交通（12 筆）
@@ -1013,5 +1018,5 @@ object HualienLocalAddressDB {
             aliases = listOf("鳳林", "鳳林鎮"),
             priority = 4
         )
-    )
+    ) }
 }
