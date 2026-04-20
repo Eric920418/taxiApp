@@ -44,9 +44,8 @@ object HualienLocalAddressDB {
     private var dynamicLandmarks: List<LocalLandmark> = emptyList()
     private var deletedStaticNames: Set<String> = emptySet()
 
-    init {
-        rebuildIndex()
-    }
+    // 注意：init 移到檔案底部，放在 LANDMARKS 宣告之後執行
+    // （Kotlin object 按源碼位置順序初始化，init 必須晚於它引用的 val）
 
     /**
      * 重建記憶體索引：static（hardcoded）+ dynamic（Server 同步）
@@ -207,12 +206,14 @@ object HualienLocalAddressDB {
 
     // ========== 地標資料庫 ==========
     //
-    // 注意：用 by lazy 而非直接賦值，是因為 init block 位於此檔案頂部（line ~47）
-    // 但這個大 List 宣告在底部。Kotlin object 的 property initializer 按「源碼順序」
-    // 執行 — 若用 `val LANDMARKS = listOf(...)`，init block 先跑時 LANDMARKS 尚為
-    // null，會觸發 NPE → ExceptionInInitializerError → object 永遠無法載入 →
-    // 整個 App 閃退。by lazy 把初始化延後到第一次存取，解耦順序依賴。
-    private val LANDMARKS: List<LocalLandmark> by lazy { listOf(
+    // 此 val 必須宣告在 init block 之前，否則 init 裡 rebuildIndex 引用 LANDMARKS
+    // 時會遇到未初始化的 backing field (null) → NPE → ExceptionInInitializerError
+    // → 整個 object class 載入失敗 → App 閃退。
+    //
+    // 曾嘗試用 `by lazy` 延後，但 lazy delegate 的 Lazy 物件本身也是 property
+    // initializer，同樣受源碼順序影響 — `Lazy.getValue()` 也會 NPE。真正的解法
+    // 就是把 init 搬到此 val 之後。
+    private val LANDMARKS: List<LocalLandmark> = listOf(
 
         // ================================================
         // 交通（12 筆）
@@ -1018,5 +1019,10 @@ object HualienLocalAddressDB {
             aliases = listOf("鳳林", "鳳林鎮"),
             priority = 4
         )
-    ) }
+    )
+
+    // init 放在 LANDMARKS 之後，確保 LANDMARKS 已初始化才重建索引
+    init {
+        rebuildIndex()
+    }
 }
