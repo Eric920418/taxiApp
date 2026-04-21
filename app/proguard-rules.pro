@@ -72,6 +72,9 @@
 # Lottie (動畫)
 # ============================
 -dontwarn com.airbnb.android.lottie.**
+-keep class com.airbnb.lottie.** { *; }
+-keep class com.airbnb.lottie.parser.** { *; }
+-keep class com.airbnb.lottie.model.** { *; }
 
 # ============================
 # Kotlin / Coroutines

@@ -1,19 +1,16 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12+ 資料萃取規則：雲端備份 + 裝置轉移
+    原則：排除 DataStore（含 auth_token / driverId / phone），避免敏感資料被同步到
+    使用者 Google Drive 或換機時帶走。使用者重新安裝需重新登入。
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="datastore/" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="datastore/" />
     </device-transfer>
-    -->
 </data-extraction-rules>

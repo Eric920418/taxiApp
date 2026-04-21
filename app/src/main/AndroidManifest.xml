@@ -14,9 +14,6 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
-    <!-- 電話狀態權限（用於基站定位） -->
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-
     <!-- 前景服務權限 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
@@ -44,10 +41,10 @@
         android:usesCleartextTraffic="false"
         tools:targetApi="31">
 
-        <!-- Google Maps API Key -->
+        <!-- Google Maps API Key（從 local.properties 注入，見 app/build.gradle.kts） -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyA08KCrwB7pWn2UhNDMGnOr7Dt9FRm1-wo" />
+            android:value="${MAPS_API_KEY}" />
 
         <activity
             android:name=".MainActivity"

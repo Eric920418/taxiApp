@@ -20,6 +20,14 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+// 讀取 local.properties（Maps API Key 等敏感設定，不進 git）
+val localPropertiesFile = rootProject.file("local.properties")
+val localProperties = Properties()
+if (localPropertiesFile.exists()) {
+    localProperties.load(FileInputStream(localPropertiesFile))
+}
+val mapsApiKey: String = localProperties.getProperty("MAPS_API_KEY") ?: ""
+
 android {
     namespace = "com.hualien.taxidriver"
     compileSdk = 36
@@ -28,14 +36,24 @@ android {
         applicationId = "com.hualien.taxidriver"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "beta17"
+        versionCode = 18
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // BuildConfig設定
         buildConfigField("String", "SERVER_URL", "\"https://api.hualientaxi.taxi/api/\"")
         buildConfigField("String", "WS_URL", "\"https://api.hualientaxi.taxi\"")
+
+        // Google Maps API Key 從 local.properties 注入 Manifest（不 hardcode）
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
+    }
+
+    // AAB split 設定（Play Store 按裝置下載最小 APK）
+    bundle {
+        language { enableSplit = true }
+        density { enableSplit = true }
+        abi { enableSplit = true }
     }
 
     // Signing 配置

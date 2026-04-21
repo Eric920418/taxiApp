@@ -47,6 +47,7 @@ adb logcat -s LandmarkSync   # 看到「同步完成：收到 N 筆」
 - [開發指南](#開發指南)
 - [Firebase 設定](#firebase-設定)
 - [測試與除錯](#測試與除錯)
+- [Release 上架流程](#release-上架流程)
 - [版本歷史](#版本歷史)
 
 ---
@@ -546,6 +547,268 @@ Android Studio → Extended Controls → Location
 | Token 未攜帶 | 確認 `RetrofitClient.init()` 在 MainActivity 中已呼叫 |
 | 定位不準確 | 使用實體裝置、檢查權限 |
 | 簡訊驗證失敗 | 確認 Blaze 方案、SHA-256 指紋 |
+
+---
+
+## Release 上架流程
+
+> Google Play Store 正式上架完整手冊。首次上架預計 4-6 週（身份驗證 + 14 天封測 + 審核）。
+
+### 已在本 Commit 完成（程式碼層）
+
+| 項目 | 狀態 | 檔案 |
+|------|------|------|
+| 版本號改正式版 1.0.0 | ✅ | `app/build.gradle.kts` |
+| Maps API Key 從 local.properties 注入 | ✅ | `app/build.gradle.kts` + `AndroidManifest.xml` |
+| 移除未使用的 READ_PHONE_STATE | ✅ | `AndroidManifest.xml` |
+| AAB split 配置（language/density/abi） | ✅ | `app/build.gradle.kts` |
+| ProGuard 加 Lottie keep 規則 | ✅ | `app/proguard-rules.pro` |
+| Backup 排除 DataStore | ✅ | `res/xml/data_extraction_rules.xml` + `backup_rules.xml` |
+
+### 需使用者手動完成（無法程式化）
+
+#### 1. Google Cloud Console — Rotate Maps API Key
+
+舊 Key `AIzaSyA08KCrwB7pWn2UhNDMGnOr7Dt9FRm1-wo` 已外洩在 git 歷史，必須作廢：
+
+1. https://console.cloud.google.com/apis/credentials
+2. **建立新 Key** → Application restrictions: **Android apps**
+3. 加入：
+   - Package name: `com.hualien.taxidriver`
+   - SHA-1 指紋（執行 `./gradlew signingReport`，抓 Variant: `release` 的 SHA-1）
+4. API restrictions → 只勾：**Maps SDK for Android**、**Places API**、**Directions API**、**Distance Matrix API**、**Geolocation API**
+5. 儲存後複製新 Key → 貼到 `local.properties` 的 `MAPS_API_KEY=`
+6. **刪除舊 Key**（同一頁的舊 Key 按刪除）
+
+#### 2. Firebase Console — 審核員測試號碼
+
+https://console.firebase.google.com/project/_/authentication/providers → Phone → **Phone numbers for testing**
+
+新增兩筆（不會真的發 SMS，Release build 也生效）：
+
+| 用途 | Phone number | Test code |
+|------|-------------|-----------|
+| Play 審核員（乘客） | `+886 900000001` | `123456` |
+| Play 審核員（司機） | `+886 900000002` | `123456` |
+
+#### 3. 後端 DB Seed（`~/Desktop/HualienTaxiServer`）
+
+Firebase 驗證通過後，後端還要找到對應的 passenger/driver 才能登入成功。加一個 seed script：
+
+```typescript
+// prisma/seed-reviewer.ts
+import { PrismaClient } from '@prisma/client'
+const prisma = new PrismaClient()
+
+async function main() {
+  await prisma.passenger.upsert({
+    where: { phone: '+886900000001' },
+    update: {},
+    create: { phone: '+886900000001', name: 'Play Reviewer' },
+  })
+  await prisma.driver.upsert({
+    where: { phone: '+886900000002' },
+    update: { availability: true },
+    create: {
+      phone: '+886900000002',
+      name: 'Play Reviewer Driver',
+      plate: '審核-001',
+      availability: true,
+    },
+  })
+}
+main().finally(() => prisma.$disconnect())
+```
+
+執行：`cd ~/Desktop/HualienTaxiServer && pnpm tsx prisma/seed-reviewer.ts`
+
+#### 4. 後端 `/privacy` 靜態頁
+
+在 `~/Desktop/HualienTaxiServer` 的 Express app 加上：
+
+```typescript
+// src/routes/privacy.ts
+import { Router } from 'express'
+import path from 'path'
+const router = Router()
+router.get('/privacy', (_req, res) => {
+  res.sendFile(path.join(__dirname, '../../public/privacy.html'))
+})
+export default router
+```
+
+在 `~/Desktop/HualienTaxiServer/public/privacy.html` 放以下內容（中文合規版）：
+
+```html
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>花蓮計程車 — 隱私政策</title>
+<style>
+  body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; max-width: 780px; margin: 40px auto; padding: 0 20px; line-height: 1.7; color: #222; }
+  h1 { border-bottom: 2px solid #FFC107; padding-bottom: 8px; }
+  h2 { margin-top: 32px; color: #333; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; }
+  th { background: #f7f7f7; }
+  code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; }
+  .meta { color: #666; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>花蓮計程車 隱私政策</h1>
+<p class="meta">最後更新：2026-04-21｜生效日：2026-04-21</p>
+
+<p>花蓮計程車 App（以下稱「本服務」）由 Eric 個人開發者 營運，提供花蓮地區計程車叫車媒合服務。本政策說明我們如何蒐集、使用、儲存與保護您的個人資料。</p>
+
+<h2>1. 我們蒐集的資料</h2>
+<table>
+<tr><th>資料類型</th><th>用途</th><th>是否分享第三方</th></tr>
+<tr><td>手機號碼</td><td>Firebase 身份驗證（SMS OTP）</td><td>否（Firebase 僅用於驗證）</td></tr>
+<tr><td>暱稱</td><td>訂單顯示</td><td>否</td></tr>
+<tr><td>精確位置（GPS）</td><td>司機定位回傳、乘客叫車位置、路線規劃</td><td>否</td></tr>
+<tr><td>粗略位置（WiFi/基站）</td><td>GPS 無訊號時備援定位</td><td>否</td></tr>
+<tr><td>相機</td><td>司機端拍攝里程表結帳憑證</td><td>否（僅上傳至本服務伺服器）</td></tr>
+<tr><td>麥克風</td><td>語音助理輸入地址（僅處理當下指令）</td><td>否（不保存錄音）</td></tr>
+<tr><td>FCM Token（裝置識別）</td><td>訂單推播通知</td><td>否</td></tr>
+</table>
+
+<h2>2. 資料的使用</h2>
+<ul>
+  <li>媒合乘客與附近司機</li>
+  <li>計算車資、規劃最短路線</li>
+  <li>傳送即時訂單狀態（接單、到達、完成）</li>
+  <li>客服查詢與糾紛處理</li>
+</ul>
+
+<h2>3. 第三方服務</h2>
+<ul>
+  <li><strong>Firebase Authentication</strong>（Google）— 手機號碼驗證</li>
+  <li><strong>Firebase Cloud Messaging</strong>（Google）— 推播通知</li>
+  <li><strong>Google Maps / Places / Directions API</strong>（Google）— 地圖、地點搜尋、路線</li>
+</ul>
+<p>本服務<strong>不使用廣告 SDK、不販售使用者資料、不做跨站追蹤</strong>。</p>
+
+<h2>4. 資料保留與刪除</h2>
+<ul>
+  <li>訂單紀錄保留 2 年供税務與客服查詢</li>
+  <li>位置紀錄僅於訂單進行中暫存，訂單完成後 30 天內刪除原始軌跡</li>
+  <li>使用者可在 App「個人資料」頁面點選「刪除帳號」或來信 <code>26416387.re@gmail.com</code> 申請刪除帳號，我們將於 7 天內刪除所有可識別資料</li>
+</ul>
+
+<h2>5. 資料安全</h2>
+<ul>
+  <li>所有 API 通訊使用 HTTPS/TLS 加密</li>
+  <li>手機端 token 透過 Android DataStore 加密儲存，並排除 Auto-Backup</li>
+  <li>伺服器位於 AWS Lightsail，定期更新安全修補</li>
+</ul>
+
+<h2>6. 兒童隱私</h2>
+<p>本服務不針對 13 歲以下兒童設計，亦不主動蒐集兒童資料。</p>
+
+<h2>7. 政策變更</h2>
+<p>本政策如有重大變更將透過 App 內通知告知。繼續使用本服務即視為同意更新後之政策。</p>
+
+<h2>8. 聯絡我們</h2>
+<p>Email：<a href="mailto:26416387.re@gmail.com">26416387.re@gmail.com</a></p>
+</body>
+</html>
+```
+
+部署後 `curl -I https://api.hualientaxi.taxi/privacy` 應回 **200**。
+
+#### 5. Foreground Service 使用情境影片
+
+Play Store 要求說明為何需要背景定位。錄 30-60 秒展示：
+1. 司機登入、按「上線」
+2. App 返回後台（按 Home）
+3. 鎖螢幕一段時間
+4. 收到新訂單推播 → 展開 App → 地圖仍顯示最新位置
+
+上傳 YouTube **Unlisted**（不公開），把連結貼進 Play Console → App content → Data safety。
+
+#### 6. 商店素材
+
+| 素材 | 規格 | 備註 |
+|------|------|------|
+| App icon | 512×512 PNG | 從 `mipmap-xxxhdpi/ic_launcher.webp` 放大或重製 |
+| Feature Graphic | 1024×500 PNG | 主視覺圖，需設計 |
+| 手機截圖 | 至少 2 張、最多 8 張，1080×1920 | 建議：角色選擇、司機接單、乘客叫車、結帳 |
+| 簡短描述 | ≤ 80 字 | 中英文各一 |
+| 完整描述 | ≤ 4000 字 | 中英文各一 |
+| 分類 | Maps & Navigation | |
+| 內容分級 | 填 IARC 問卷 | 預期 Everyone |
+
+### Release Build 指令
+
+```bash
+# 1. 取 release SHA-1（Firebase & Maps restriction 需要）
+./gradlew signingReport | grep -A5 "Variant: release" | grep SHA1
+
+# 2. 產出 AAB（上傳到 Play Console）
+./gradlew clean bundleRelease
+# 產物：app/build/outputs/bundle/release/app-release.aab
+
+# 3. 驗證簽名
+$ANDROID_HOME/build-tools/*/apksigner verify --verbose \
+  app/build/outputs/bundle/release/app-release.aab
+
+# 4. 本地測試 AAB（需要 bundletool）
+bundletool build-apks --bundle=app/build/outputs/bundle/release/app-release.aab \
+  --output=release.apks --ks=app/release-keystore.jks --ks-key-alias=hualien-taxi
+bundletool install-apks --apks=release.apks
+```
+
+### Data Safety 表單答題稿（Play Console 填）
+
+| 資料類型 | 是否蒐集 | 是否分享 | 用途 | 可選 |
+|---------|---------|---------|------|------|
+| Approximate location | Yes | No | App functionality | No |
+| Precise location | Yes | No | App functionality | No |
+| Phone number | Yes | No | Account management | No |
+| Name | Yes | No | Account management | Yes |
+| Photos | No* | No | — | — |
+| Audio recordings | No* | No | — | — |
+| FCM Token / Device ID | Yes | No | App functionality, Analytics | No |
+
+*相機與麥克風為**即時處理、不儲存**，故不算「蒐集」。
+
+### Closed Testing（14 天硬等）
+
+1. Play Console → **Testing → Closed testing → Create track**
+2. 上傳 `app-release.aab`
+3. 新增測試員名單：**至少 12 位** email（個人開發者帳號必須）
+4. 發布 → 自動開始 14 天 opt-in 倒數
+5. 14 天內測試員需實際安裝並開啟 App
+
+### Production 送審
+
+14 天滿後：
+
+1. Play Console → **Production → Create new release → 重用 testing 軌道的 AAB**
+2. Release notes（中英）
+3. **App content**：
+   - 隱私政策 URL：`https://api.hualientaxi.taxi/privacy`
+   - Data safety：按上表填寫
+   - 權限宣告：Foreground Service Location 附 YouTube 連結
+   - **Permitted content declarations**：上傳運輸業經營文件（公司登記 / 靠行證明）
+4. **Store listing → App access**：填審核員測試號碼
+   ```
+   沒有登入頁說明需要：Yes
+   Username: 0900000001 (乘客端) / 0900000002 (司機端)
+   Password: 固定 OTP 123456
+   操作說明：啟動 App 後選擇「乘客」或「司機」角色，輸入上方號碼，OTP 使用 123456。
+   ```
+5. 送審（標準 1-7 天）
+
+### 風險提醒
+
+- **舊 Maps Key 已在 git 歷史** — 必須在 Cloud Console 刪除，否則有人翻歷史仍可盜用
+- **Google Play 計程車類審核嚴格** — 第一次被拒常見，需看具體原因補件
+- **14 天封測無法加速** — Google 個人開發者政策
+- **Firebase SMS 免費配額 10/天** — 正式版有量需升 Blaze
 
 ---
 
