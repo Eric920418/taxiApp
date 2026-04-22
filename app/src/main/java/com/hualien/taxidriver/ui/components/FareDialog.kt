@@ -8,14 +8,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.delay
 import kotlin.math.min
 import kotlin.math.max
 
@@ -38,10 +44,28 @@ fun FareDialog(
     subsidyConfirmed: Boolean = false,
     subsidyAmount: Int = 0
 ) {
-    var amount by remember { mutableStateOf(initialAmount?.toString() ?: "") }
+    // 用 TextFieldValue 以便控制選取範圍（預填金額開啟時全選，方便直接覆蓋）
+    val initialText = initialAmount?.toString() ?: ""
+    var amount by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = initialText,
+                selection = TextRange(0, initialText.length) // 預設全選預填值
+            )
+        )
+    }
     val hasSubsidy = subsidyType == "LOVE_CARD" && subsidyConfirmed && subsidyAmount > 0
-    val meterValue = amount.toIntOrNull() ?: 0
+    val meterValue = amount.text.toIntOrNull() ?: 0
     val isValid = meterValue > 0
+
+    // 自動聚焦 + 自動彈出數字鍵盤（長輩不用再點一次輸入框）
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        delay(150) // 等 Dialog 動畫結束再聚焦，避免聚焦失敗
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -70,12 +94,17 @@ fun FareDialog(
                 )
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // 車資輸入框（大字、數字過濾）
+                // 車資輸入框（大字、數字過濾、自動聚焦、預填全選）
                 OutlinedTextField(
                     value = amount,
-                    onValueChange = { input ->
+                    onValueChange = { new ->
                         // 只保留數字，最多 5 位（避免異常大數字）
-                        amount = input.filter { it.isDigit() }.take(5)
+                        val filtered = new.text.filter { it.isDigit() }.take(5)
+                        // 若文字被截斷，把 selection 夾回合法範圍
+                        amount = new.copy(
+                            text = filtered,
+                            selection = TextRange(filtered.length.coerceAtMost(new.selection.end))
+                        )
                     },
                     label = {
                         Text(
@@ -96,7 +125,8 @@ fun FareDialog(
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(84.dp),
+                        .height(84.dp)
+                        .focusRequester(focusRequester),
                     textStyle = TextStyle(
                         fontSize = 32.sp,
                         fontWeight = FontWeight.Bold,
