@@ -63,6 +63,54 @@ private val StatusBlue = Color(0xFF2196F3)
 private val DarkText = Color(0xFF212121)
 private val SubText = Color(0xFF757575)
 
+// ====== 狀態顏色統一規則（長輩友善一眼辨識）======
+// 已接單=綠 | 已到達=紫 | 行程中=藍 | 結算中=橘 | 已完成=深綠
+private fun orderStatusColor(status: OrderStatus): Color = when (status) {
+    OrderStatus.OFFERED -> Color(0xFF2196F3)   // 新訂單：亮藍
+    OrderStatus.ACCEPTED -> Color(0xFF4CAF50)  // 已接單：綠
+    OrderStatus.ARRIVED -> Color(0xFF9C27B0)   // 已到達：紫
+    OrderStatus.ON_TRIP -> Color(0xFF1976D2)   // 行程中：深藍
+    OrderStatus.SETTLING -> Color(0xFFFF9800)  // 結算中：橘
+    OrderStatus.DONE -> Color(0xFF2E7D32)      // 已完成：深綠
+    else -> Color(0xFF757575)                  // 其他：灰
+}
+
+private fun orderStatusLabel(status: OrderStatus): String = when (status) {
+    OrderStatus.OFFERED -> "新訂單"
+    OrderStatus.ACCEPTED -> "已接單"
+    OrderStatus.ARRIVED -> "已到達"
+    OrderStatus.ON_TRIP -> "行程中"
+    OrderStatus.SETTLING -> "結算中"
+    OrderStatus.DONE -> "已完成"
+    else -> status.name
+}
+
+/**
+ * 格式化乘客顯示名稱 — 隱藏 LINE_xxx 系統 ID，改顯示友善名稱
+ */
+private fun formatPassengerDisplay(order: Order): String {
+    val phone = order.passengerPhone ?: ""
+    val name = order.passengerName
+    val isFakePhone = phone.startsWith("LINE_") || phone.startsWith("PHONE_")
+
+    return when {
+        order.source == "LINE" -> if (name.isNotBlank() && name != "乘客") "LINE 乘客：$name" else "LINE 乘客"
+        order.source == "PHONE" && !isFakePhone -> "電話訂單：$phone"
+        order.source == "PHONE" -> "電話訂單"
+        !isFakePhone && phone.isNotBlank() -> phone
+        name.isNotBlank() && name != "乘客" -> name
+        else -> "乘客"
+    }
+}
+
+/**
+ * 判斷電話是否為真實號碼（非 LINE_/PHONE_ 開頭的假電話）
+ */
+private fun isRealPhoneNumber(phone: String?): Boolean {
+    if (phone.isNullOrBlank()) return false
+    return !phone.startsWith("LINE_") && !phone.startsWith("PHONE_")
+}
+
 /**
  * 主頁面 - 司機狀態 + 訂單管理（大按鈕版本，適合老年司機）
  */
@@ -104,6 +152,22 @@ fun HomeScreen(
     var showFareDialog by remember { mutableStateOf(false) }
     var fareDialogInitialAmount by remember { mutableStateOf<Int?>(null) }
     var currentOrderIdForFare by remember { mutableStateOf<String?>(null) }
+
+    // 流程簡化：訂單進入 SETTLING 狀態時自動彈車資輸入視窗
+    // 用 orderId 去重，避免關閉後又被相同狀態重新觸發
+    var autoOpenedFareForOrder by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(uiState.currentOrder?.orderId, uiState.currentOrder?.status) {
+        val order = uiState.currentOrder
+        if (order != null &&
+            order.status == OrderStatus.SETTLING &&
+            autoOpenedFareForOrder != order.orderId
+        ) {
+            currentOrderIdForFare = order.orderId
+            fareDialogInitialAmount = order.estimatedFare
+            showFareDialog = true
+            autoOpenedFareForOrder = order.orderId
+        }
+    }
 
     // 位置權限和錄音權限
     var hasLocationPermission by remember { mutableStateOf(false) }
@@ -318,27 +382,30 @@ fun HomeScreen(
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        // 標題行
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        // ===== 1. 狀態（最顯眼：大字 + 色塊）=====
+                        Surface(
+                            color = orderStatusColor(currentOrder.status).copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = "🚕", fontSize = 20.sp)
-                                Spacer(modifier = Modifier.width(8.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = "目前訂單",
-                                    fontSize = 20.sp,
+                                    text = orderStatusLabel(currentOrder.status),
+                                    fontSize = 26.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = DarkText
+                                    color = orderStatusColor(currentOrder.status)
                                 )
                                 // 訂單來源標示
                                 if (currentOrder.source != null) {
-                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "- ${currentOrder.getSourceDisplayName()}",
-                                        fontSize = 18.sp,
+                                        text = currentOrder.getSourceDisplayName(),
+                                        fontSize = 20.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = when (currentOrder.source) {
                                             "LINE" -> Color(0xFF00C300)
@@ -348,119 +415,31 @@ fun HomeScreen(
                                     )
                                 }
                             }
-                            Surface(
-                                color = when (currentOrder.status) {
-                                    OrderStatus.OFFERED -> StatusBlue
-                                    OrderStatus.ACCEPTED -> StatusGreen
-                                    OrderStatus.ARRIVED -> Color(0xFF9C27B0)
-                                    OrderStatus.ON_TRIP -> Color(0xFF00BCD4)
-                                    OrderStatus.SETTLING -> StatusOrange
-                                    else -> StatusGray
-                                }.copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text(
-                                    text = when (currentOrder.status) {
-                                        OrderStatus.OFFERED -> "新訂單"
-                                        OrderStatus.ACCEPTED -> "已接單"
-                                        OrderStatus.ARRIVED -> "已到達"
-                                        OrderStatus.ON_TRIP -> "行程中"
-                                        OrderStatus.SETTLING -> "結算中"
-                                        else -> currentOrder.status.name
-                                    },
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = when (currentOrder.status) {
-                                        OrderStatus.OFFERED -> StatusBlue
-                                        OrderStatus.ACCEPTED -> StatusGreen
-                                        OrderStatus.ARRIVED -> Color(0xFF9C27B0)
-                                        OrderStatus.ON_TRIP -> Color(0xFF00BCD4)
-                                        OrderStatus.SETTLING -> StatusOrange
-                                        else -> StatusGray
-                                    }
-                                )
-                            }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
-                        // 訂單標籤（來源/補貼/寵物）
-                        if (currentOrder.source != null && currentOrder.source != "APP") {
-                            OrderTagRow(
-                                order = currentOrder,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                        }
-
-                        // 電話號碼
-                        val displayPhone = currentOrder.passengerPhone ?: currentOrder.customerPhone
-                        displayPhone?.let { phone ->
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(bottom = 10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Phone,
-                                    contentDescription = null,
-                                    tint = ActionBlue,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = phone,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = DarkText
-                                )
-                            }
-                        }
-
-                        // 電話訂單來電號碼（如果與顯示電話不同）
-                        if (currentOrder.isPhoneOrder() && !currentOrder.customerPhone.isNullOrEmpty()
-                            && currentOrder.customerPhone != displayPhone
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(bottom = 10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Phone,
-                                    contentDescription = null,
-                                    tint = Color(0xFFFF8C00),
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "來電: ${currentOrder.customerPhone}",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = Color(0xFFFF8C00)
-                                )
-                            }
-                        }
-
-                        // 上車點
+                        // ===== 2. 上車點（放大 22sp）=====
                         Row(
                             verticalAlignment = Alignment.Top,
-                            modifier = Modifier.padding(bottom = 10.dp)
+                            modifier = Modifier.padding(bottom = 12.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Place,
                                 contentDescription = null,
                                 tint = Color(0xFF4CAF50),
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(28.dp)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = "上車",
-                                    fontSize = 14.sp,
+                                    fontSize = 18.sp,
                                     color = SubText
                                 )
                                 Text(
                                     text = currentOrder.pickup.address ?: "未提供地址",
-                                    fontSize = 18.sp,
+                                    fontSize = 22.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = DarkText,
                                     maxLines = 2,
@@ -469,28 +448,28 @@ fun HomeScreen(
                             }
                         }
 
-                        // 目的地
+                        // ===== 3. 目的地 =====
                         currentOrder.destination?.let { dest ->
                             Row(
                                 verticalAlignment = Alignment.Top,
-                                modifier = Modifier.padding(bottom = 8.dp)
+                                modifier = Modifier.padding(bottom = 12.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.LocationOn,
                                     contentDescription = null,
-                                    tint = Color(0xFF4CAF50),
-                                    modifier = Modifier.size(22.dp)
+                                    tint = Color(0xFFE53935),
+                                    modifier = Modifier.size(28.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = "目的地",
-                                        fontSize = 14.sp,
+                                        fontSize = 18.sp,
                                         color = SubText
                                     )
                                     Text(
                                         text = dest.address ?: "未提供地址",
-                                        fontSize = 18.sp,
+                                        fontSize = 22.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = DarkText,
                                         maxLines = 2,
@@ -500,7 +479,51 @@ fun HomeScreen(
                             }
                         }
 
-                        // 距離和時間資訊
+                        // ===== 4. 聯絡方式（只顯示真實電話，LINE 假電話顯示友善名稱）=====
+                        run {
+                            val realPhone = listOfNotNull(currentOrder.passengerPhone, currentOrder.customerPhone)
+                                .firstOrNull { isRealPhoneNumber(it) }
+                            val displayText = formatPassengerDisplay(currentOrder)
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(bottom = 12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = ActionBlue,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = displayText,
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = DarkText
+                                    )
+                                    if (realPhone != null) {
+                                        Text(
+                                            text = realPhone,
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = ActionBlue
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // ===== 5. 特殊需求 / 備註（補貼/寵物）=====
+                        if (currentOrder.source != null && currentOrder.source != "APP") {
+                            OrderTagRow(
+                                order = currentOrder,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                        }
+
+                        // 距離和時間資訊（字體放大）
                         if (currentOrder.distanceToPickup != null || currentOrder.tripDistance != null || currentOrder.estimatedFare != null) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Card(
@@ -511,22 +534,21 @@ fun HomeScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(12.dp),
+                                        .padding(14.dp),
                                     horizontalArrangement = Arrangement.SpaceEvenly
                                 ) {
                                     currentOrder.distanceToPickup?.let { distance ->
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text("🚗 到客人", fontSize = 12.sp, color = SubText)
+                                            Text("🚗 到客人", fontSize = 15.sp, color = SubText)
                                             Text(
                                                 text = distance.formatKilometers(),
-                                                fontSize = 16.sp,
+                                                fontSize = 20.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = DarkText
                                             )
-                                            // ETA：優先用 googleEtaSeconds（更精確），fallback 到 etaToPickup
                                             val etaMinutes = currentOrder.googleEtaSeconds?.let { it / 60 } ?: currentOrder.etaToPickup
                                             etaMinutes?.let { eta ->
-                                                Text("約 $eta 分鐘到", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = StatusBlue)
+                                                Text("約 $eta 分鐘到", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = StatusBlue)
                                             }
                                         }
                                     }
@@ -535,22 +557,22 @@ fun HomeScreen(
                                         Box(
                                             modifier = Modifier
                                                 .width(1.dp)
-                                                .height(40.dp)
+                                                .height(52.dp)
                                                 .background(Color(0xFFE0E0E0))
                                         )
                                     }
 
                                     currentOrder.tripDistance?.let { distance ->
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text("📍 行程", fontSize = 12.sp, color = SubText)
+                                            Text("📍 行程", fontSize = 15.sp, color = SubText)
                                             Text(
                                                 text = distance.formatKilometers(),
-                                                fontSize = 16.sp,
+                                                fontSize = 20.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = DarkText
                                             )
                                             currentOrder.estimatedTripDuration?.let { duration ->
-                                                Text("約 $duration 分鐘", fontSize = 12.sp, color = SubText)
+                                                Text("約 $duration 分鐘", fontSize = 15.sp, color = SubText)
                                             }
                                         }
                                     }
@@ -560,19 +582,19 @@ fun HomeScreen(
                                             Box(
                                                 modifier = Modifier
                                                     .width(1.dp)
-                                                    .height(40.dp)
+                                                    .height(52.dp)
                                                     .background(Color(0xFFE0E0E0))
                                             )
                                         }
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text("💰 車資", fontSize = 12.sp, color = SubText)
+                                            Text("💰 車資", fontSize = 15.sp, color = SubText)
                                             Text(
                                                 text = "NT$ $fare",
-                                                fontSize = 16.sp,
+                                                fontSize = 20.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color(0xFF4CAF50)
                                             )
-                                            Text("預估", fontSize = 12.sp, color = SubText)
+                                            Text("預估", fontSize = 13.sp, color = SubText)
                                         }
                                     }
                                 }
@@ -769,7 +791,7 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                // ====== 訂單操作按鈕 ======
+                // ====== 訂單操作按鈕（長輩友善：每個狀態只保留一個主要大按鈕）======
                 Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                     when (currentOrder.status) {
                         OrderStatus.OFFERED -> {
@@ -783,12 +805,12 @@ fun HomeScreen(
                                     },
                                     modifier = Modifier
                                         .weight(1f)
-                                        .height(72.dp),
+                                        .height(80.dp),
                                     enabled = !uiState.isLoading,
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFE53935))
                                 ) {
-                                    Text("拒絕", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE53935))
+                                    Text("拒絕", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE53935))
                                 }
                                 Button(
                                     onClick = {
@@ -796,18 +818,18 @@ fun HomeScreen(
                                     },
                                     modifier = Modifier
                                         .weight(1.5f)
-                                        .height(72.dp),
+                                        .height(80.dp),
                                     enabled = !uiState.isLoading,
                                     colors = ButtonDefaults.buttonColors(containerColor = ButtonActiveGreen),
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(14.dp)
                                 ) {
                                     if (uiState.isLoading) {
                                         CircularProgressIndicator(
-                                            modifier = Modifier.size(24.dp),
+                                            modifier = Modifier.size(26.dp),
                                             color = Color.White
                                         )
                                     } else {
-                                        Text("接受訂單", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                                        Text("接受訂單", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -818,12 +840,12 @@ fun HomeScreen(
                                 onClick = { viewModel.markArrived(currentOrder.orderId) },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(56.dp),
+                                    .height(80.dp),
                                 enabled = !uiState.isLoading,
-                                colors = ButtonDefaults.buttonColors(containerColor = ButtonActiveGreen),
-                                shape = RoundedCornerShape(12.dp)
+                                colors = ButtonDefaults.buttonColors(containerColor = orderStatusColor(OrderStatus.ACCEPTED)),
+                                shape = RoundedCornerShape(14.dp)
                             ) {
-                                Text("已到達上車點", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                Text("已到達上車點", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
@@ -832,12 +854,12 @@ fun HomeScreen(
                                 onClick = { viewModel.startTrip(currentOrder.orderId) },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(56.dp),
+                                    .height(80.dp),
                                 enabled = !uiState.isLoading,
-                                colors = ButtonDefaults.buttonColors(containerColor = ButtonActiveGreen),
-                                shape = RoundedCornerShape(12.dp)
+                                colors = ButtonDefaults.buttonColors(containerColor = orderStatusColor(OrderStatus.ARRIVED)),
+                                shape = RoundedCornerShape(14.dp)
                             ) {
-                                Text("開始行程", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                Text("開始行程", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
@@ -846,31 +868,27 @@ fun HomeScreen(
                                 onClick = { viewModel.endTrip(currentOrder.orderId) },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(56.dp),
+                                    .height(80.dp),
                                 enabled = !uiState.isLoading,
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
-                                shape = RoundedCornerShape(12.dp)
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
+                                shape = RoundedCornerShape(14.dp)
                             ) {
-                                Text("結束行程", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                Text("結束行程", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
+                        // SETTLING：不顯示按鈕，由 LaunchedEffect 自動彈車資輸入窗
                         OrderStatus.SETTLING -> {
-                            Button(
-                                onClick = {
-                                    currentOrderIdForFare = currentOrder.orderId
-                                    fareDialogInitialAmount = currentOrder.estimatedFare
-                                    showFareDialog = true
-                                },
+                            Text(
+                                text = "請輸入車資",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = orderStatusColor(OrderStatus.SETTLING),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(56.dp),
-                                enabled = !uiState.isLoading,
-                                colors = ButtonDefaults.buttonColors(containerColor = StatusOrange),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("提交車資", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            }
+                                    .padding(vertical = 20.dp),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
                         }
 
                         else -> {}
