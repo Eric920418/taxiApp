@@ -8,7 +8,12 @@ import com.hualien.taxidriver.data.remote.dto.NightFareDto
 import com.hualien.taxidriver.data.remote.dto.SpringFestivalDto
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlin.math.ceil
+
+// 花蓮縣府公告以台北時區為準。明確指定避免裝置時區（旅外）導致計費錯誤。
+private val TAIPEI: ZoneId = ZoneId.of("Asia/Taipei")
 
 /**
  * 計程車車資計算工具
@@ -137,13 +142,13 @@ object FareCalculator {
      */
     fun calculateFare(
         distanceMeters: Int,
-        at: LocalDate = LocalDate.now(),
-        atTime: LocalTime = LocalTime.now(),
+        at: ZonedDateTime = ZonedDateTime.now(TAIPEI),
         slowTrafficSeconds: Int = 0,
         config: FareConfig = currentConfig
     ): FareResult {
-        val isSpringFestival = isSpringFestival(at, config.springFestival)
-        val isNight = isNightTime(atTime, config.night)
+        val taipei = at.withZoneSameInstant(TAIPEI)
+        val isSpringFestival = isSpringFestival(taipei.toLocalDate(), config.springFestival)
+        val isNight = isNightTime(taipei.toLocalTime(), config.night)
         val useNightSchedule = isSpringFestival || isNight
 
         val basePrice: Int
@@ -219,14 +224,15 @@ object FareCalculator {
         maxDistanceMeters: Int,
         config: FareConfig = currentConfig
     ): Pair<Int, Int> {
+        val today = LocalDate.now(TAIPEI)
         val dayMin = calculateFare(
             distanceMeters = minDistanceMeters,
-            atTime = LocalTime.NOON,
+            at = ZonedDateTime.of(today, LocalTime.NOON, TAIPEI),
             config = config
         ).totalFare
         val nightMax = calculateFare(
             distanceMeters = maxDistanceMeters,
-            atTime = LocalTime.of(23, 0),
+            at = ZonedDateTime.of(today, LocalTime.of(23, 0), TAIPEI),
             config = config
         ).totalFare
         return Pair(dayMin, nightMax)
