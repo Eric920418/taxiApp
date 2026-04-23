@@ -36,8 +36,8 @@ android {
         applicationId = "com.hualien.taxidriver"
         minSdk = 26
         targetSdk = 36
-        versionCode = 18
-        versionName = "1.0.0"
+        versionCode = 19
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -81,8 +81,19 @@ android {
             // Firebase App Distribution 配置
             firebaseAppDistribution {
                 artifactType = "APK"
-                releaseNotes = "Beta 測試版 - 歡迎回報問題！"
-                // 測試者群組（稍後在 Firebase Console 設定）
+                releaseNotes = """
+                    v1.1.0 (beta19) — 費率對齊花蓮縣府公告 + rebrand
+
+                    1. 全面 rebrand：花蓮計程車 → GoGoCha（App 名稱 / Logo / About / 通知文案）
+                    2. 費率重構對齊花蓮縣府公告：
+                       - 日：起跳 100/1000m、每跳 5/230m、低速 120 秒/5 元
+                       - 夜 (22:00–06:00)：起跳 100/834m、每跳 5/192m、低速 100 秒/5 元
+                       - 春節：admin 設定後全日套夜費率 + 每趟加收 50 元
+                    3. 時區修復：計算統一用台北時區（Asia/Taipei），跨時區裝置不再算錯
+                    4. Firebase 登入失敗訊息加 actionable hint（SHA-1、配額、reCAPTCHA 提示）
+                    5. 司機端結算距離反推公式對齊新費率
+                """.trimIndent()
+                // 測試者群組
                 groups = "beta-testers"
             }
         }
