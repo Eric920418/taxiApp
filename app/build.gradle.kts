@@ -93,8 +93,8 @@ android {
                     4. Firebase 登入失敗訊息加 actionable hint（SHA-1、配額、reCAPTCHA 提示）
                     5. 司機端結算距離反推公式對齊新費率
                 """.trimIndent()
-                // 測試者群組
-                groups = "beta-testers"
+                // 測試者群組（需先在 Firebase Console → App Distribution → Testers & groups 建立此群組並加 testers）
+                // groups = "beta-testers"
             }
         }
     }
