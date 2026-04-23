@@ -1239,42 +1239,36 @@ MainActivity.kt                  # 初始化乘客通知頻道
 
 **問題**：車資計算結果會出現 119、143 這種不合理的尾數（實際跳錶只會出現 0 或 5）。
 
-**修復**：改用跳錶次數計算法
-```kotlin
-跳錶次數 = ceil((距離公尺 - 1250) / 200)
-里程費 = 跳錶次數 × 5 元
-夜間加成 = roundToNearest5(日間車資 × 20%)
-```
+**修復**：改用跳錶次數計算法（每跳次數 × 跳價，自然產生 0/5 尾數）。
 
 **修改檔案**：`utils/FareCalculator.kt`
 
-#### 新功能：費率可從 Server 動態調整
+#### 費率動態管理（對齊花蓮縣府公告）
 
-費率現在可以透過 Server 的 `.env` 環境變數統一管理，Android 端會在啟動時自動載入。
+費率由 Server 統一管理，Android 端啟動時呼叫 `FareCalculator.loadConfigFromServer()` 自動同步。Admin 可在 `https://api.hualientaxi.taxi/admin/settings` 修改後即時生效（App 下次啟動套用）。
 
-**Server 端配置**（`/var/www/taxiServer/.env`）：
-```bash
-FARE_BASE_PRICE=100           # 起跳價
-FARE_BASE_DISTANCE_METERS=1250  # 起跳距離
-FARE_JUMP_DISTANCE_METERS=200   # 每跳距離
-FARE_JUMP_PRICE=5             # 每跳價格
-FARE_NIGHT_SURCHARGE_RATE=0.2   # 夜間加成比例
-FARE_NIGHT_START_HOUR=23      # 夜間開始時間
-FARE_NIGHT_END_HOUR=6         # 夜間結束時間
-```
+**結構（巢狀，對齊花蓮縣府公告）**：
+- **日費率**（白天）：起跳 100 元/1000m、每跳 5 元/230m、低速 120 秒/5 元
+- **夜費率**（22:00–06:00）：起跳 100 元/834m、每跳 5 元/192m、低速 100 秒/5 元
+- **春節加成**：期間內全日套夜費率 + 每趟加收 50 元（admin 每年手動更新起訖日期）
+- **愛心卡補貼**：每趟 73 元（政府補貼）
+
+> 註：夜費率與日費率的「起跳價」「每跳價」相同（100/5），夜間加成是透過**縮短跳距**實現。**不再使用 `nightSurchargeRate` 百分比加成**。
+
+**持久化**：Server 寫入 `config/fareConfig.json`（取代舊的 `.env` 扁平變數）。
 
 **API 端點**：
-- `GET /api/config/fare` - 取得費率配置
+- `GET /api/config/fare` - 取得費率配置（巢狀 JSON）
+- `PUT /api/config/fare` - 更新費率配置（admin 用，可送局部 Partial）
 - `POST /api/config/fare/calculate` - 測試車資計算
+  - Body: `{ distanceMeters, at?: ISO datetime, slowTrafficSeconds?: number }`
+  - `at` 用於指定時間以驗證夜間 / 春節分支
 
-**新增檔案**：
-- Server: `src/services/FareConfigService.ts`, `src/api/config.ts`
-- Android: `data/remote/dto/FareConfigDto.kt`
+**檔案**：
+- Server: `src/services/FareConfigService.ts`, `src/api/config.ts`, `admin-panel/src/pages/Settings.tsx`
+- Android: `data/remote/dto/FareConfigDto.kt`, `utils/FareCalculator.kt`
 
-**修改檔案**：
-- `utils/FareCalculator.kt` - 新增 `loadConfigFromServer()`
-- `MainActivity.kt` - 啟動時載入費率配置
-- `data/remote/ApiService.kt` - 新增 `getFareConfig()` API
+> **低速計時（駐車費）功能**：欄位已存於 schema，但 GPS 計時整合（追蹤車輛靜止時間）為下階段獨立 feature，目前計算傳入 `slowTrafficSeconds = 0`。
 
 #### 修復 2：確認目的地語音增加派車預估時間
 

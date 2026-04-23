@@ -720,15 +720,15 @@ class HomeViewModel : ViewModel() {
             val passengerName = currentOrder?.passengerName ?: "乘客"
 
             // 計算行程距離和時長
-            // 優先使用預估距離(tripDistance)，若無則用跳表金額反推
-            // 花蓮費率：起步100元/1.25km，續程每公里25元
-            // 公式反推：distance = 1.25 + (fare - 100) / 25
+            // 優先使用預估距離(tripDistance)，若無則用跳表金額反推（粗估，僅用於今日統計）
+            // 對齊花蓮縣府公告日費率：起跳 100/1000m + 5 元/230m
+            // 反推：distance(km) = 1.0 + max(0, (fare - 100) / 5) * 0.23
+            // TODO 未來在 FareCalculator 提供 estimateDistanceFromFare() 取代寫死反推
             val distanceKm = currentOrder?.tripDistance ?: run {
                 if (meterAmount <= 100) {
-                    1.25  // 起步價內
+                    1.0
                 } else {
-                    // 1.25km + (超出部分金額 / 25)km
-                    1.25 + (meterAmount - 100) / 25.0
+                    1.0 + (meterAmount - 100) / 5.0 * 0.23
                 }
             }
             val durationMinutes = currentOrder?.startedAt?.let { startedAt ->

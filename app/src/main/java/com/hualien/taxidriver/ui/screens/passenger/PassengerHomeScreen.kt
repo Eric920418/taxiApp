@@ -1117,10 +1117,17 @@ fun AddressSelectionSheet(
                         }
                     }
 
-                    if (fareEstimate.isNightTime) {
+                    val noteText = when {
+                        fareEstimate.isSpringFestival ->
+                            "※ 春節期間 — 全日套夜間費率，加收 NT$ ${fareEstimate.springFestivalSurcharge}"
+                        fareEstimate.isNightTime ->
+                            "※ 夜間時段已套用夜間費率"
+                        else -> null
+                    }
+                    if (noteText != null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "※ 包含夜間加成 NT$ ${fareEstimate.nightSurcharge}",
+                            text = noteText,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
                         )

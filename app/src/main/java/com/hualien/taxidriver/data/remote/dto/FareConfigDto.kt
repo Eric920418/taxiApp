@@ -4,7 +4,7 @@ import com.google.gson.annotations.SerializedName
 
 /**
  * 車資費率配置 DTO
- * 從 Server 取得動態費率配置
+ * 對齊 Server 巢狀結構（day / night / springFestival / loveCardSubsidyAmount）
  */
 data class FareConfigResponse(
     val success: Boolean,
@@ -12,27 +12,35 @@ data class FareConfigResponse(
 )
 
 data class FareConfigData(
-    @SerializedName("basePrice")
-    val basePrice: Int,              // 起跳價（元）
+    @SerializedName("day") val day: DayFareDto,
+    @SerializedName("night") val night: NightFareDto,
+    @SerializedName("springFestival") val springFestival: SpringFestivalDto,
+    @SerializedName("loveCardSubsidyAmount") val loveCardSubsidyAmount: Int = 73
+)
 
-    @SerializedName("baseDistanceMeters")
-    val baseDistanceMeters: Int,     // 起跳距離（公尺）
+data class DayFareDto(
+    @SerializedName("basePrice") val basePrice: Int,
+    @SerializedName("baseDistanceMeters") val baseDistanceMeters: Int,
+    @SerializedName("jumpDistanceMeters") val jumpDistanceMeters: Int,
+    @SerializedName("jumpPrice") val jumpPrice: Int,
+    @SerializedName("slowTrafficSeconds") val slowTrafficSeconds: Int,
+    @SerializedName("slowTrafficPrice") val slowTrafficPrice: Int
+)
 
-    @SerializedName("jumpDistanceMeters")
-    val jumpDistanceMeters: Int,     // 每跳距離（公尺）
+data class NightFareDto(
+    @SerializedName("basePrice") val basePrice: Int,
+    @SerializedName("baseDistanceMeters") val baseDistanceMeters: Int,
+    @SerializedName("jumpDistanceMeters") val jumpDistanceMeters: Int,
+    @SerializedName("jumpPrice") val jumpPrice: Int,
+    @SerializedName("slowTrafficSeconds") val slowTrafficSeconds: Int,
+    @SerializedName("slowTrafficPrice") val slowTrafficPrice: Int,
+    @SerializedName("startHour") val startHour: Int,
+    @SerializedName("endHour") val endHour: Int
+)
 
-    @SerializedName("jumpPrice")
-    val jumpPrice: Int,              // 每跳價格（元）
-
-    @SerializedName("nightSurchargeRate")
-    val nightSurchargeRate: Double,  // 夜間加成比例
-
-    @SerializedName("nightStartHour")
-    val nightStartHour: Int,         // 夜間開始時間
-
-    @SerializedName("nightEndHour")
-    val nightEndHour: Int,           // 夜間結束時間
-
-    @SerializedName("loveCardSubsidyAmount")
-    val loveCardSubsidyAmount: Int = 73  // 愛心卡每趟補貼金額（元）
+data class SpringFestivalDto(
+    @SerializedName("enabled") val enabled: Boolean,
+    @SerializedName("startDate") val startDate: String,  // YYYY-MM-DD
+    @SerializedName("endDate") val endDate: String,
+    @SerializedName("perTripSurcharge") val perTripSurcharge: Int
 )

@@ -2,54 +2,71 @@ package com.hualien.taxidriver.utils
 
 import android.util.Log
 import com.hualien.taxidriver.data.remote.RetrofitClient
+import com.hualien.taxidriver.data.remote.dto.DayFareDto
 import com.hualien.taxidriver.data.remote.dto.FareConfigData
+import com.hualien.taxidriver.data.remote.dto.NightFareDto
+import com.hualien.taxidriver.data.remote.dto.SpringFestivalDto
+import java.time.LocalDate
 import java.time.LocalTime
 import kotlin.math.ceil
 
 /**
  * 計程車車資計算工具
  *
- * 費率從 Server 動態取得，可在 .env 中調整：
- * - FARE_BASE_PRICE: 起跳價（預設 100 元）
- * - FARE_BASE_DISTANCE_METERS: 起跳距離（預設 1250 公尺）
- * - FARE_JUMP_DISTANCE_METERS: 每跳距離（預設 200 公尺）
- * - FARE_JUMP_PRICE: 每跳價格（預設 5 元）
- * - FARE_NIGHT_SURCHARGE_RATE: 夜間加成比例（預設 0.2）
- * - FARE_NIGHT_START_HOUR: 夜間開始時間（預設 23）
- * - FARE_NIGHT_END_HOUR: 夜間結束時間（預設 6）
+ * 對齊花蓮縣政府計程車費率公告（與 Server FareConfigService 同步）：
+ *   - 日費率：起跳 100/1000m、每跳 5/230m、低速 120 秒/5 元
+ *   - 夜費率（22:00–06:00）：起跳 100/834m、每跳 5/192m、低速 100 秒/5 元
+ *   - 春節：全日套夜費率 + 每趟加收 50 元
+ *
+ * 費率從 Server 動態取得（GET /api/config/fare），admin 可在 Web 後台調整。
+ * Server 未連線時 fallback 到本檔內預設值。
  */
 object FareCalculator {
 
     private const val TAG = "FareCalculator"
 
-    /**
-     * 費率設定
-     */
-    data class FareConfig(
-        val basePrice: Int = 100,              // 起跳價（元）
-        val baseDistanceMeters: Int = 1250,    // 起跳距離（公尺）= 1.25 公里
-        val meterJumpDistanceMeters: Int = 200, // 每跳距離（公尺）
-        val meterJumpPrice: Int = 5,           // 每跳價格（元）
-        val nightSurchargeRate: Double = 0.2,  // 夜間加成比例（20%）
-        val nightStartHour: Int = 23,          // 夜間開始時間
-        val nightEndHour: Int = 6              // 夜間結束時間
+    data class DayFare(
+        val basePrice: Int = 100,
+        val baseDistanceMeters: Int = 1000,
+        val jumpDistanceMeters: Int = 230,
+        val jumpPrice: Int = 5,
+        val slowTrafficSeconds: Int = 120,
+        val slowTrafficPrice: Int = 5
     )
 
-    // 預設配置（fallback）
+    data class NightFare(
+        val basePrice: Int = 100,
+        val baseDistanceMeters: Int = 834,
+        val jumpDistanceMeters: Int = 192,
+        val jumpPrice: Int = 5,
+        val slowTrafficSeconds: Int = 100,
+        val slowTrafficPrice: Int = 5,
+        val startHour: Int = 22,
+        val endHour: Int = 6
+    )
+
+    data class SpringFestival(
+        val enabled: Boolean = false,
+        val startDate: String = "2026-02-16",
+        val endDate: String = "2026-02-22",
+        val perTripSurcharge: Int = 50
+    )
+
+    data class FareConfig(
+        val day: DayFare = DayFare(),
+        val night: NightFare = NightFare(),
+        val springFestival: SpringFestival = SpringFestival()
+    )
+
     private val defaultConfig = FareConfig()
 
-    // 當前使用的配置（可由 Server 更新）
     private var currentConfig: FareConfig = defaultConfig
     private var configLoaded = false
 
-    /** 愛心卡每趟補貼金額（從 Server 載入） */
+    /** 愛心卡每趟補貼金額（從 Server 載入，fallback 73） */
     var loveCardSubsidyAmount: Int = 73
         private set
 
-    /**
-     * 從 Server 取得費率配置並更新
-     * 建議在 Application 或 MainActivity 啟動時呼叫
-     */
     suspend fun loadConfigFromServer(): Boolean {
         return try {
             val response = RetrofitClient.apiService.getFareConfig()
@@ -69,165 +86,176 @@ object FareCalculator {
         }
     }
 
-    /**
-     * 從 Server 回應更新配置
-     */
     fun updateConfig(serverConfig: FareConfigData) {
         currentConfig = FareConfig(
-            basePrice = serverConfig.basePrice,
-            baseDistanceMeters = serverConfig.baseDistanceMeters,
-            meterJumpDistanceMeters = serverConfig.jumpDistanceMeters,
-            meterJumpPrice = serverConfig.jumpPrice,
-            nightSurchargeRate = serverConfig.nightSurchargeRate,
-            nightStartHour = serverConfig.nightStartHour,
-            nightEndHour = serverConfig.nightEndHour
+            day = serverConfig.day.toDay(),
+            night = serverConfig.night.toNight(),
+            springFestival = serverConfig.springFestival.toSpringFestival()
         )
         loveCardSubsidyAmount = serverConfig.loveCardSubsidyAmount
         configLoaded = true
     }
 
-    /**
-     * 取得當前費率配置
-     */
+    private fun DayFareDto.toDay() = DayFare(
+        basePrice = basePrice,
+        baseDistanceMeters = baseDistanceMeters,
+        jumpDistanceMeters = jumpDistanceMeters,
+        jumpPrice = jumpPrice,
+        slowTrafficSeconds = slowTrafficSeconds,
+        slowTrafficPrice = slowTrafficPrice
+    )
+
+    private fun NightFareDto.toNight() = NightFare(
+        basePrice = basePrice,
+        baseDistanceMeters = baseDistanceMeters,
+        jumpDistanceMeters = jumpDistanceMeters,
+        jumpPrice = jumpPrice,
+        slowTrafficSeconds = slowTrafficSeconds,
+        slowTrafficPrice = slowTrafficPrice,
+        startHour = startHour,
+        endHour = endHour
+    )
+
+    private fun SpringFestivalDto.toSpringFestival() = SpringFestival(
+        enabled = enabled,
+        startDate = startDate,
+        endDate = endDate,
+        perTripSurcharge = perTripSurcharge
+    )
+
     fun getConfig(): FareConfig = currentConfig
 
-    /**
-     * 費率是否已從 Server 載入
-     */
     fun isConfigLoaded(): Boolean = configLoaded
 
     /**
-     * 四捨五入到最接近的 5 元
-     * 例：21 → 20, 23 → 25, 27 → 25, 28 → 30
-     */
-    private fun roundToNearest5(value: Int): Int {
-        return ((value + 2) / 5) * 5
-    }
-
-    /**
-     * 計算車資
-     *
-     * 計算公式（跳錶制）：
-     * - 起跳距離內：起跳價
-     * - 超過後每跳一次加價
-     * - 車資尾數只會是 0 或 5
+     * 計算車資（跳錶制）
      *
      * @param distanceMeters 行駛距離（公尺）
-     * @param isNightTime 是否為夜間時段（可選，預設根據當前時間判斷）
-     * @param config 費率設定（可選，使用當前配置，優先使用 Server 配置）
-     * @return 計算結果
+     * @param at 計算當下時間（未指定則用 now），可指定以測試夜間/春節
+     * @param slowTrafficSeconds 低速累積秒數（Phase A 預設 0，Phase C 接 GPS）
+     * @param config 費率設定（預設使用 currentConfig）
      */
     fun calculateFare(
         distanceMeters: Int,
-        isNightTime: Boolean? = null,
+        at: LocalDate = LocalDate.now(),
+        atTime: LocalTime = LocalTime.now(),
+        slowTrafficSeconds: Int = 0,
         config: FareConfig = currentConfig
     ): FareResult {
+        val isSpringFestival = isSpringFestival(at, config.springFestival)
+        val isNight = isNightTime(atTime, config.night)
+        val useNightSchedule = isSpringFestival || isNight
 
-        // 轉換為公里（用於顯示）
-        val distanceKm = distanceMeters / 1000.0
+        val basePrice: Int
+        val baseDistanceMeters: Int
+        val jumpDistanceMeters: Int
+        val jumpPrice: Int
+        val slowSecPerUnit: Int
+        val slowPricePerUnit: Int
+        if (useNightSchedule) {
+            basePrice = config.night.basePrice
+            baseDistanceMeters = config.night.baseDistanceMeters
+            jumpDistanceMeters = config.night.jumpDistanceMeters
+            jumpPrice = config.night.jumpPrice
+            slowSecPerUnit = config.night.slowTrafficSeconds
+            slowPricePerUnit = config.night.slowTrafficPrice
+        } else {
+            basePrice = config.day.basePrice
+            baseDistanceMeters = config.day.baseDistanceMeters
+            jumpDistanceMeters = config.day.jumpDistanceMeters
+            jumpPrice = config.day.jumpPrice
+            slowSecPerUnit = config.day.slowTrafficSeconds
+            slowPricePerUnit = config.day.slowTrafficPrice
+        }
 
-        // 計算超出起跳距離的部分
-        val extraDistanceMeters = maxOf(0, distanceMeters - config.baseDistanceMeters)
-
-        // 計算跳錶次數（無條件進位，超過就跳）
+        val extraDistanceMeters = maxOf(0, distanceMeters - baseDistanceMeters)
         val meterJumps = if (extraDistanceMeters > 0) {
-            ceil(extraDistanceMeters.toDouble() / config.meterJumpDistanceMeters).toInt()
+            ceil(extraDistanceMeters.toDouble() / jumpDistanceMeters).toInt()
         } else {
             0
         }
+        val distanceFare = meterJumps * jumpPrice
 
-        // 里程費 = 跳錶次數 × 每跳價格（尾數只會是 0 或 5）
-        val distanceFare = meterJumps * config.meterJumpPrice
-        val fare = config.basePrice + distanceFare
+        val slowTrafficUnits = if (slowTrafficSeconds > 0) slowTrafficSeconds / slowSecPerUnit else 0
+        val slowTrafficFare = slowTrafficUnits * slowPricePerUnit
 
-        // 判斷是否為夜間時段
-        val nightTime = isNightTime ?: isCurrentlyNightTime(
-            config.nightStartHour,
-            config.nightEndHour
-        )
+        val springFestivalSurcharge = if (isSpringFestival) config.springFestival.perTripSurcharge else 0
 
-        // 夜間加成（四捨五入到 5 元，確保尾數為 0 或 5）
-        val nightSurcharge = if (nightTime) {
-            val rawSurcharge = fare * config.nightSurchargeRate
-            roundToNearest5(rawSurcharge.toInt())
-        } else {
-            0
-        }
-
-        val totalFare = fare + nightSurcharge
+        val totalFare = basePrice + distanceFare + slowTrafficFare + springFestivalSurcharge
 
         return FareResult(
-            baseFare = config.basePrice,
+            baseFare = basePrice,
             distanceFare = distanceFare,
-            nightSurcharge = nightSurcharge,
+            slowTrafficFare = slowTrafficFare,
+            springFestivalSurcharge = springFestivalSurcharge,
             totalFare = totalFare,
-            distanceKm = distanceKm,
-            isNightTime = nightTime
+            distanceKm = distanceMeters / 1000.0,
+            isNightTime = isNight,
+            isSpringFestival = isSpringFestival,
+            appliedSchedule = if (useNightSchedule) Schedule.NIGHT else Schedule.DAY
         )
     }
 
-    /**
-     * 判斷當前是否為夜間時段
-     */
-    private fun isCurrentlyNightTime(nightStartHour: Int, nightEndHour: Int): Boolean {
-        return try {
-            val now = LocalTime.now()
-            val currentHour = now.hour
-
-            // 跨日情況（例如 23:00 - 06:00）
-            if (nightStartHour > nightEndHour) {
-                currentHour >= nightStartHour || currentHour < nightEndHour
-            } else {
-                currentHour in nightStartHour until nightEndHour
-            }
-        } catch (e: Exception) {
-            false
+    private fun isNightTime(at: LocalTime, night: NightFare): Boolean {
+        val hour = at.hour
+        return if (night.startHour > night.endHour) {
+            hour >= night.startHour || hour < night.endHour
+        } else {
+            hour in night.startHour until night.endHour
         }
     }
 
+    private fun isSpringFestival(at: LocalDate, sf: SpringFestival): Boolean {
+        if (!sf.enabled) return false
+        val today = at.toString()  // ISO YYYY-MM-DD
+        return today in sf.startDate..sf.endDate
+    }
+
     /**
-     * 根據距離範圍估算車資（返回最小值和最大值）
-     * 用於在不確定確切距離時提供參考
+     * 估算車資範圍（最小 = 日費率短程，最大 = 夜費率長程）
      */
     fun estimateFareRange(
         minDistanceMeters: Int,
         maxDistanceMeters: Int,
         config: FareConfig = currentConfig
     ): Pair<Int, Int> {
-        val minFare = calculateFare(minDistanceMeters, false, config).totalFare
-        val maxFare = calculateFare(maxDistanceMeters, true, config).totalFare
-        return Pair(minFare, maxFare)
+        val dayMin = calculateFare(
+            distanceMeters = minDistanceMeters,
+            atTime = LocalTime.NOON,
+            config = config
+        ).totalFare
+        val nightMax = calculateFare(
+            distanceMeters = maxDistanceMeters,
+            atTime = LocalTime.of(23, 0),
+            config = config
+        ).totalFare
+        return Pair(dayMin, nightMax)
     }
 
-    /**
-     * 格式化車資顯示
-     */
-    fun FareResult.formatDisplay(): String {
-        return buildString {
-            append("預估車資：NT$ $totalFare\n")
-            append("├─ 起跳價：NT$ $baseFare\n")
-            if (distanceFare > 0) {
-                append("├─ 里程費：NT$ $distanceFare\n")
-            }
-            if (nightSurcharge > 0) {
-                append("├─ 夜間加成：NT$ $nightSurcharge\n")
-            }
-            append("└─ 距離：${String.format("%.2f", distanceKm)} 公里")
-            if (isNightTime) {
-                append("\n   （夜間時段 23:00-06:00）")
-            }
+    fun FareResult.formatDisplay(): String = buildString {
+        append("預估車資：NT$ $totalFare\n")
+        append("├─ 起跳價：NT$ $baseFare\n")
+        if (distanceFare > 0) append("├─ 里程費：NT$ $distanceFare\n")
+        if (slowTrafficFare > 0) append("├─ 低速計時：NT$ $slowTrafficFare\n")
+        if (springFestivalSurcharge > 0) append("├─ 春節加成：NT$ $springFestivalSurcharge\n")
+        append("└─ 距離：${String.format("%.2f", distanceKm)} 公里")
+        when {
+            isSpringFestival -> append("\n   （春節期間 — 全日套夜費率）")
+            isNightTime -> append("\n   （夜間時段適用夜費率）")
         }
     }
 }
 
-/**
- * 車資計算結果
- */
+enum class Schedule { DAY, NIGHT }
+
 data class FareResult(
-    val baseFare: Int,          // 起跳價
-    val distanceFare: Int,      // 里程費
-    val nightSurcharge: Int,    // 夜間加成
-    val totalFare: Int,         // 總車資
-    val distanceKm: Double,     // 距離（公里）
-    val isNightTime: Boolean    // 是否夜間
+    val baseFare: Int,                 // 起跳價
+    val distanceFare: Int,             // 里程費
+    val slowTrafficFare: Int,          // 低速計時費（Phase C 才會 > 0）
+    val springFestivalSurcharge: Int,  // 春節每趟加收
+    val totalFare: Int,                // 總車資
+    val distanceKm: Double,            // 距離（公里）
+    val isNightTime: Boolean,          // 是否夜間時段
+    val isSpringFestival: Boolean,     // 是否春節期間
+    val appliedSchedule: Schedule      // 實際套用的費率組（DAY 或 NIGHT）
 )
