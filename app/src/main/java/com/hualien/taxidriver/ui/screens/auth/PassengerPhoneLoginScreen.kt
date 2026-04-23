@@ -140,7 +140,7 @@ fun PassengerPhoneLoginScreen(
         ) {
             // Logo/標題
             Text(
-                text = "🚕 花蓮計程車",
+                text = "🚕 GoGoCha",
                 style = MaterialTheme.typography.headlineLarge,
                 color = MaterialTheme.colorScheme.primary
             )

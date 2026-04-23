@@ -292,7 +292,7 @@ class LocationService : Service() {
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("花蓮計程車 - 定位服務運行中")
+            .setContentTitle("GoGoCha - 定位服務運行中")
             .setContentText("正在回報您的位置")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)

@@ -544,7 +544,7 @@ private fun AboutDialog(
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("關於花蓮計程車")
+                Text("關於 GoGoCha")
             }
         },
         text = {
@@ -568,7 +568,7 @@ private fun AboutDialog(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "花蓮計程車司機端",
+                            text = "GoGoCha 司機端",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
@@ -603,7 +603,7 @@ private fun AboutDialog(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
-                    text = "© 2024 花蓮計程車服務",
+                    text = "© 2026 GoGoCha",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

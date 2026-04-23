@@ -21,3 +21,12 @@ keystore.properties
 
 # Firebase service account key
 *-service-account.json
+
+# Kotlin compile error logs
+.kotlin/
+
+# SDK 自動生成的本地註冊 ID（每台 install 應獨立，不該共用）
+app/src/main/assets/adi-registration.properties
+
+# Play Store 上架素材（截圖 / 圖示，避免 repo 變肥）
+play-store-assets/

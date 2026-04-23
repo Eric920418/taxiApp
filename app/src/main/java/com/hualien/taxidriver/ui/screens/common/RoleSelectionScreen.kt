@@ -42,7 +42,7 @@ fun RoleSelectionScreen(
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = "花蓮計程車",
+            text = "GoGoCha",
             fontSize = 36.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,

@@ -118,26 +118,37 @@ class PhoneAuthViewModel : ViewModel() {
                 }
 
                 override fun onVerificationFailed(e: com.google.firebase.FirebaseException) {
-                    // 詳細的錯誤訊息
+                    // Log 完整錯誤（DEBUG 用）
+                    android.util.Log.e("PhoneAuth", "onVerificationFailed", e)
+                    android.util.Log.e("PhoneAuth", "Error type: ${e.javaClass.name}")
+                    android.util.Log.e("PhoneAuth", "Error message: ${e.message}")
+
                     val errorMsg = when (e) {
                         is com.google.firebase.FirebaseTooManyRequestsException -> {
-                            "發送過於頻繁，請稍後再試"
+                            "發送過於頻繁，請稍後再試（Firebase 每日 SMS 配額可能已用盡）"
                         }
                         is com.google.firebase.auth.FirebaseAuthInvalidCredentialsException -> {
                             "手機號碼格式錯誤：${e.message}"
                         }
                         is com.google.firebase.auth.FirebaseAuthException -> {
-                            "Firebase 驗證失敗：${e.errorCode}\n${e.message}"
+                            // 針對常見的配置錯誤給可操作提示
+                            val hint = when (e.errorCode) {
+                                "ERROR_APP_NOT_AUTHORIZED" ->
+                                    "\n\n此錯誤通常是 Firebase Console 沒有登記此 App 的 SHA-1 指紋。\n請管理員到 Firebase Console → 專案設定 → Android 應用程式 → 新增指紋，加入此 App 簽章的 SHA-1。"
+                                "ERROR_INVALID_APP_CREDENTIAL" ->
+                                    "\n\n此錯誤通常是 App Check 或 reCAPTCHA 設定問題，請聯繫管理員。"
+                                "ERROR_QUOTA_EXCEEDED" ->
+                                    "\n\nFirebase SMS 配額已用盡（免費方案每日 10 則，付費 Blaze 方案才無限）。"
+                                "ERROR_MISSING_APP_CREDENTIAL" ->
+                                    "\n\nApp 缺少驗證憑證，可能 google-services.json 損壞或版本不符。"
+                                else -> ""
+                            }
+                            "Firebase 驗證失敗（${e.errorCode}）\n${e.message}$hint"
                         }
                         else -> {
                             "驗證失敗：${e.javaClass.simpleName}\n${e.message}"
                         }
                     }
-
-                    // Log 完整錯誤
-                    android.util.Log.e("PhoneAuth", "onVerificationFailed", e)
-                    android.util.Log.e("PhoneAuth", "Error type: ${e.javaClass.name}")
-                    android.util.Log.e("PhoneAuth", "Error message: ${e.message}")
 
                     _phoneAuthState.value = PhoneAuthState.Error(errorMsg)
                 }
@@ -224,7 +235,12 @@ class PhoneAuthViewModel : ViewModel() {
                 )
             } else {
                 android.util.Log.e("PhoneAuth", "Firebase 返回的 user 為 null")
-                _phoneAuthState.value = PhoneAuthState.Error("Firebase 驗證失敗")
+                _phoneAuthState.value = PhoneAuthState.Error(
+                    "Firebase 驗證失敗：signInWithCredential 回傳 user 為 null。\n" +
+                        "這通常代表 Firebase Auth 配置問題：\n" +
+                        "• 請管理員確認 Firebase Console 已登記此 App 的 SHA-1 指紋\n" +
+                        "• 或 Firebase Phone Provider 是否啟用"
+                )
             }
         } catch (e: Exception) {
             android.util.Log.e("PhoneAuth", "憑證驗證失敗", e)

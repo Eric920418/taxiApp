@@ -197,9 +197,9 @@ object PassengerNotificationHelper {
     ) {
         val title = "行程已完成"
         val body = if (fareAmount != null) {
-            "本次車資：$fareAmount 元\n感謝您使用花蓮計程車！"
+            "本次車資：$fareAmount 元\n感謝您使用 GoGoCha！"
         } else {
-            "感謝您使用花蓮計程車！"
+            "感謝您使用 GoGoCha！"
         }
 
         showOrderStatusNotification(context, title, body, orderId)

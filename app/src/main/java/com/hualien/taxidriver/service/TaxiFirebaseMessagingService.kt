@@ -101,7 +101,7 @@ class TaxiFirebaseMessagingService : FirebaseMessagingService() {
      */
     private fun handleDataMessage(data: Map<String, String>) {
         val type = data["type"] ?: TYPE_SYSTEM
-        val title = data["title"] ?: "花蓮計程車"
+        val title = data["title"] ?: "GoGoCha"
         val body = data["body"] ?: ""
         val orderId = data["orderId"]
 

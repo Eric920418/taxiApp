@@ -96,7 +96,7 @@ fun PassengerSettingsScreen(
             SettingsSection(title = "關於") {
                 SettingsItem(
                     icon = Icons.Default.Info,
-                    title = "關於花蓮計程車",
+                    title = "關於 GoGoCha",
                     subtitle = "版本 ${BuildConfig.VERSION_NAME}",
                     onClick = { showAboutDialog = true }
                 )
@@ -468,7 +468,7 @@ private fun AboutDialogForPassenger(
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("關於花蓮計程車")
+                Text("關於 GoGoCha")
             }
         },
         text = {
@@ -491,7 +491,7 @@ private fun AboutDialogForPassenger(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "花蓮計程車乘客端",
+                            text = "GoGoCha 乘客端",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
@@ -519,7 +519,7 @@ private fun AboutDialogForPassenger(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
-                    text = "© 2024 花蓮計程車服務",
+                    text = "© 2026 GoGoCha",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
