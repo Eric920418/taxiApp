@@ -42,7 +42,11 @@ fun FareDialog(
     initialAmount: Int? = null,
     subsidyType: String = "NONE",
     subsidyConfirmed: Boolean = false,
-    subsidyAmount: Int = 0
+    subsidyAmount: Int = 0,
+    /** 行程內累計低速秒數（駐車費）— null 不顯示。預設 null 兼容舊呼叫。 */
+    slowTrafficSeconds: Int? = null,
+    /** 依當下費率算出的「建議加收」金額（元）— 由 HomeScreen 端用 FareCalculator 算好傳入。 */
+    slowTrafficSuggestedFare: Int? = null,
 ) {
     // 用 TextFieldValue 以便控制選取範圍（預填金額開啟時全選，方便直接覆蓋）
     val initialText = initialAmount?.toString() ?: ""
@@ -138,6 +142,37 @@ fun FareDialog(
                         focusedLabelColor = Color(0xFF4CAF50)
                     )
                 )
+
+                // 低速計時建議（駐車費）— 司機自行決定要不要加上去
+                if (slowTrafficSeconds != null && slowTrafficSeconds > 0 && (slowTrafficSuggestedFare ?: 0) > 0) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "低速計時 ${slowTrafficSeconds} 秒",
+                                fontSize = 16.sp,
+                                color = Color(0xFF757575)
+                            )
+                            Text(
+                                text = "（依花蓮縣府公告駐車費）",
+                                fontSize = 13.sp,
+                                color = Color(0xFFAEAEAE)
+                            )
+                        }
+                        Text(
+                            text = "建議加收 NT$ ${slowTrafficSuggestedFare}",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFF9800)
+                        )
+                    }
+                }
 
                 // 愛心卡補貼明細
                 if (hasSubsidy) {

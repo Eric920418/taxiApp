@@ -290,6 +290,9 @@ fun SeniorFriendlyHomeScreen(
     // 車資對話框
     if (showFareDialog) {
         val currentOrder = uiState.currentOrder
+        val slowSec = uiState.slowTrafficSeconds
+        val slowSuggested = slowSec?.let { com.hualien.taxidriver.utils.FareCalculator.suggestSlowTrafficFare(it) }
+            ?.takeIf { it > 0 }
         FareDialog(
             onDismiss = { showFareDialog = false },
             onConfirm = { meterAmount, photoUri ->
@@ -301,7 +304,9 @@ fun SeniorFriendlyHomeScreen(
             },
             subsidyType = currentOrder?.subsidyType ?: "NONE",
             subsidyConfirmed = currentOrder?.subsidyConfirmed ?: false,
-            subsidyAmount = com.hualien.taxidriver.utils.FareCalculator.loveCardSubsidyAmount
+            subsidyAmount = com.hualien.taxidriver.utils.FareCalculator.loveCardSubsidyAmount,
+            slowTrafficSeconds = slowSec,
+            slowTrafficSuggestedFare = slowSuggested,
         )
     }
 

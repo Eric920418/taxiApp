@@ -268,6 +268,33 @@ object FareCalculator {
     }
 
     /**
+     * 由低速秒數計算「建議加收」金額（駐車費）
+     *
+     * 依當下時間自動套日/夜 schedule 的 slowTrafficSeconds 與 slowTrafficPrice。
+     * 公式：floor(seconds / threshold) × price
+     *
+     * 用途：FareDialog 顯示給司機的建議加收金額；司機自行決定是否加上去。
+     * 回傳 0 表示不到一個門檻（不夠加錢）— 呼叫端可選擇不顯示或顯示 0。
+     */
+    fun suggestSlowTrafficFare(
+        seconds: Int,
+        at: ZonedDateTime = ZonedDateTime.now(TAIPEI),
+        config: FareConfig = currentConfig
+    ): Int {
+        if (seconds <= 0) return 0
+        val taipei = at.withZoneSameInstant(TAIPEI)
+        val isNight = isNightTime(taipei.toLocalTime(), config.night)
+        val isSF = isSpringFestival(taipei.toLocalDate(), config.springFestival)
+        // DayFare / NightFare 沒共同 supertype，分支取屬性
+        val (threshold, price) = if (isNight || isSF) {
+            config.night.slowTrafficSeconds to config.night.slowTrafficPrice
+        } else {
+            config.day.slowTrafficSeconds to config.day.slowTrafficPrice
+        }
+        return (seconds / threshold) * price
+    }
+
+    /**
      * 估算車資範圍（最小 = 日費率短程，最大 = 夜費率長程）
      */
     fun estimateFareRange(

@@ -19,6 +19,9 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.utils.BatteryOptimizationManager
 import com.hualien.taxidriver.utils.LocationConfig
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -61,6 +64,12 @@ class LocationService : Service() {
         // 位移過濾
         private const val MIN_DISPLACEMENT_METERS = 10f // 最小位移10米才更新
         private const val MIN_TIME_BETWEEN_UPDATES = 3000L // 最少3秒間隔
+
+        // 速度推送（給 SlowTrafficTimer 用）— 每次 location callback 都更新，
+        // 不受 displacement filter 影響（車輛靜止時也會 emit），這樣低速計時才能算到停車時段。
+        // 單位：m/s。null 表示尚無 location fix。
+        private val _speedFlow = MutableStateFlow<Float?>(null)
+        val speedFlow: StateFlow<Float?> = _speedFlow.asStateFlow()
     }
 
     override fun onCreate() {
@@ -75,6 +84,9 @@ class LocationService : Service() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
                     val currentTime = System.currentTimeMillis()
+
+                    // 速度推送（不受 displacement filter 影響）— 給 SlowTrafficTimer 用
+                    _speedFlow.value = location.speed
 
                     // 檢查是否應該更新位置
                     if (shouldUpdateLocation(location, currentTime)) {

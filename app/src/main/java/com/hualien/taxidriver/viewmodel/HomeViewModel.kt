@@ -15,7 +15,9 @@ import com.hualien.taxidriver.data.repository.OrderRepository
 import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.domain.model.OrderStatus
+import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.service.VoiceRecorderService
+import com.hualien.taxidriver.utils.SlowTrafficTimer
 import com.hualien.taxidriver.utils.VoiceAssistant
 import com.hualien.taxidriver.utils.VoiceChatManager
 import com.hualien.taxidriver.utils.VoiceCommandHandler
@@ -66,7 +68,10 @@ data class HomeUiState(
     // 今日統計
     val todayOrderCount: Int = 0,
     val todayEarnings: Int = 0,
-    val todayDistance: Double = 0.0
+    val todayDistance: Double = 0.0,
+    // 低速計時（駐車費）— SETTLING 時由 SlowTrafficTimer 提供，給 FareDialog 顯示「建議加收」
+    // null 表示行程尚未結束或無資料
+    val slowTrafficSeconds: Int? = null
 )
 
 /**
@@ -76,6 +81,9 @@ class HomeViewModel : ViewModel() {
 
     private val repository = OrderRepository()
     private val webSocketManager = WebSocketManager.getInstance()
+
+    // 低速計時器（駐車費）— start() 在 ON_TRIP, stop() 在 SETTLING, snapshot 給 FareDialog
+    private val slowTrafficTimer = SlowTrafficTimer()
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -123,6 +131,14 @@ class HomeViewModel : ViewModel() {
 
     init {
         android.util.Log.d("HomeViewModel", "========== HomeViewModel 初始化 ==========")
+
+        // 監聽 LocationService 速度推送，餵給 SlowTrafficTimer
+        // timer 自己用 active flag 控制要不要累計（行程內才算），不需要在這裡判斷
+        viewModelScope.launch {
+            LocationService.speedFlow.collect { speed ->
+                if (speed != null) slowTrafficTimer.onSpeedUpdate(speed)
+            }
+        }
 
         // 監聯 WebSocket 連接狀態
         viewModelScope.launch {
@@ -626,15 +642,22 @@ class HomeViewModel : ViewModel() {
 
     /**
      * 更新訂單狀態 - 開始行程
+     * 啟動 SlowTrafficTimer，行程中累計速度 < 5 km/h 的秒數
      */
     fun startTrip(orderId: String) {
+        slowTrafficTimer.start()
         updateOrderStatus(orderId, "ON_TRIP")
     }
 
     /**
      * 更新訂單狀態 - 結束行程（進入結算）
+     * 停止 SlowTrafficTimer 並 snapshot 累計秒數，給 FareDialog 顯示「建議加收」
      */
     fun endTrip(orderId: String) {
+        slowTrafficTimer.stop()
+        val seconds = slowTrafficTimer.snapshotSeconds()
+        _uiState.value = _uiState.value.copy(slowTrafficSeconds = seconds)
+        android.util.Log.d("HomeViewModel", "✅ 行程結束 — 低速累計 $seconds 秒")
         updateOrderStatus(orderId, "SETTLING")
     }
 
@@ -739,11 +762,13 @@ class HomeViewModel : ViewModel() {
 
                     // 車資提交成功，訂單完成，清除當前訂單並恢復司機狀態為可接單
                     // 同時設置待評分訂單
+                    // 清空 slowTrafficSeconds — 下一單來時 SlowTrafficTimer.start() 會重設累計
                     _uiState.value = _uiState.value.copy(
                         currentOrder = null,
                         queuedOrder = _uiState.value.queuedOrder,
                         driverStatus = if (_uiState.value.queuedOrder != null) DriverAvailability.ON_TRIP else DriverAvailability.AVAILABLE,
                         isLoading = false,
+                        slowTrafficSeconds = null,
                         error = null,
                         pendingRating = PendingRating(
                             orderId = orderId,

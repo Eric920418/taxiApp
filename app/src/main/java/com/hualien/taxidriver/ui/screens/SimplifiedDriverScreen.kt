@@ -485,6 +485,9 @@ fun SimplifiedDriverScreen(
     // 車資對話框
     if (showFareDialog) {
         val fareOrder = (orderState as? SmartOrderState.WaitingForPayment)?.order
+        val slowSec = uiState.slowTrafficSeconds
+        val slowSuggested = slowSec?.let { com.hualien.taxidriver.utils.FareCalculator.suggestSlowTrafficFare(it) }
+            ?.takeIf { it > 0 }
         FareDialog(
             onDismiss = { showFareDialog = false },
             onConfirm = { meterAmount, photoUri ->
@@ -496,7 +499,9 @@ fun SimplifiedDriverScreen(
             },
             subsidyType = fareOrder?.subsidyType ?: "NONE",
             subsidyConfirmed = fareOrder?.subsidyConfirmed ?: false,
-            subsidyAmount = com.hualien.taxidriver.utils.FareCalculator.loveCardSubsidyAmount
+            subsidyAmount = com.hualien.taxidriver.utils.FareCalculator.loveCardSubsidyAmount,
+            slowTrafficSeconds = slowSec,
+            slowTrafficSuggestedFare = slowSuggested,
         )
     }
 
