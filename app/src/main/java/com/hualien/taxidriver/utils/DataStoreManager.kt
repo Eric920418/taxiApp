@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -166,6 +167,40 @@ class DataStoreManager private constructor(private val context: Context) {
     suspend fun clearFcmToken() {
         context.dataStore.edit { preferences ->
             preferences.remove(KEY_FCM_TOKEN)
+        }
+    }
+
+    // ==================== 低速計時持久化（Phase C+1a） ====================
+    // 按 orderId 索引，App 被殺重啟後可恢復累計值繼續計時。
+    // submitFare 後呼叫 clearIdleSeconds 清理，避免 DataStore 累積垃圾紀錄。
+
+    private fun idleSecondsKey(orderId: String) = intPreferencesKey("idle_seconds_$orderId")
+
+    /**
+     * 儲存某訂單目前累計的低速秒數
+     * 由 SlowTrafficTimer 定期呼叫（throttle 過避免高頻寫）
+     */
+    suspend fun saveIdleSeconds(orderId: String, seconds: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[idleSecondsKey(orderId)] = seconds
+        }
+    }
+
+    /**
+     * 讀取某訂單已存的低速秒數，預設 0（無紀錄表示新訂單或已清空）
+     * 由 HomeViewModel.fetchActiveOrder 恢復 ON_TRIP 訂單時呼叫
+     */
+    suspend fun getIdleSeconds(orderId: String): Int {
+        return context.dataStore.data.first()[idleSecondsKey(orderId)] ?: 0
+    }
+
+    /**
+     * 清除某訂單的低速秒數紀錄
+     * 訂單完成 / 取消後呼叫，避免 DataStore 累積過時紀錄
+     */
+    suspend fun clearIdleSeconds(orderId: String) {
+        context.dataStore.edit { preferences ->
+            preferences.remove(idleSecondsKey(orderId))
         }
     }
 }

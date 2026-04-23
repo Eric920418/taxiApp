@@ -82,6 +82,8 @@ fun SeniorFriendlyHomeScreen(
 
     // 啟動時請求權限
     LaunchedEffect(Unit) {
+        // Phase C+1a：低速計時 DataStore 持久化（idempotent）
+        viewModel.initSlowTrafficPersist(context)
         permissionLauncher.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,

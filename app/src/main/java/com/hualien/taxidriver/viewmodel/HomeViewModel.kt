@@ -17,6 +17,7 @@ import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.service.VoiceRecorderService
+import com.hualien.taxidriver.utils.DataStoreManager
 import com.hualien.taxidriver.utils.SlowTrafficTimer
 import com.hualien.taxidriver.utils.VoiceAssistant
 import com.hualien.taxidriver.utils.VoiceChatManager
@@ -84,6 +85,9 @@ class HomeViewModel : ViewModel() {
 
     // 低速計時器（駐車費）— start() 在 ON_TRIP, stop() 在 SETTLING, snapshot 給 FareDialog
     private val slowTrafficTimer = SlowTrafficTimer()
+
+    // DataStoreManager — 由 initSlowTrafficPersist(context) 注入，用於跨 App 重啟保留累計值
+    private var dataStoreManager: DataStoreManager? = null
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -437,6 +441,14 @@ class HomeViewModel : ViewModel() {
                 }
 
                 if (activeOrder != null || queuedOrder != null) {
+                    // Phase C+1a：恢復 ON_TRIP 訂單時，從 DataStore 讀回 SlowTrafficTimer 累計值繼續計時
+                    if (activeOrder?.status == OrderStatus.ON_TRIP) {
+                        val restoredSec = dataStoreManager?.getIdleSeconds(activeOrder.orderId) ?: 0
+                        if (restoredSec > 0) {
+                            android.util.Log.d("HomeViewModel", "🔄 恢復低速計時: ${activeOrder.orderId} → $restoredSec 秒")
+                        }
+                        slowTrafficTimer.start(activeOrder.orderId, restoredSeconds = restoredSec)
+                    }
                     _uiState.value = _uiState.value.copy(
                         currentOrder = activeOrder,
                         queuedOrder = queuedOrder,
@@ -643,9 +655,10 @@ class HomeViewModel : ViewModel() {
     /**
      * 更新訂單狀態 - 開始行程
      * 啟動 SlowTrafficTimer，行程中累計速度 < 5 km/h 的秒數
+     * Phase C+1a：傳 orderId 給 timer，每 5 秒持久化到 DataStore
      */
     fun startTrip(orderId: String) {
-        slowTrafficTimer.start()
+        slowTrafficTimer.start(orderId)
         updateOrderStatus(orderId, "ON_TRIP")
     }
 
@@ -762,7 +775,8 @@ class HomeViewModel : ViewModel() {
 
                     // 車資提交成功，訂單完成，清除當前訂單並恢復司機狀態為可接單
                     // 同時設置待評分訂單
-                    // 清空 slowTrafficSeconds — 下一單來時 SlowTrafficTimer.start() 會重設累計
+                    // 清空 slowTrafficSeconds + DataStore 對應 orderId 紀錄（避免累積垃圾）
+                    dataStoreManager?.clearIdleSeconds(orderId)
                     _uiState.value = _uiState.value.copy(
                         currentOrder = null,
                         queuedOrder = _uiState.value.queuedOrder,
@@ -1027,6 +1041,28 @@ class HomeViewModel : ViewModel() {
     }
 
     // ==================== 語音接單相關 ====================
+
+    /**
+     * 初始化低速計時器持久化（Phase C+1a）
+     * UI 層在拿到 Context 後呼叫一次（idempotent）。
+     * 設定 timer 的 onPersist callback，每 5 秒寫一次 DataStore，
+     * App 被殺重啟時 fetchActiveOrder() 可從 DataStore 讀回累計值繼續計時。
+     */
+    fun initSlowTrafficPersist(context: Context) {
+        if (dataStoreManager != null) return
+        val dsm = DataStoreManager.getInstance(context)
+        dataStoreManager = dsm
+        slowTrafficTimer.onPersist = { orderId, seconds ->
+            viewModelScope.launch {
+                try {
+                    dsm.saveIdleSeconds(orderId, seconds)
+                } catch (e: Exception) {
+                    android.util.Log.w("HomeViewModel", "持久化低速秒數失敗: ${e.message}")
+                }
+            }
+        }
+        android.util.Log.d("HomeViewModel", "✅ 低速計時器持久化已啟用")
+    }
 
     /**
      * 初始化語音服務

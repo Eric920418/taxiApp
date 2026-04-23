@@ -122,8 +122,9 @@ fun SimplifiedDriverScreen(
         viewModel.connectWebSocket(driverId)
     }
 
-    // 初始化 ViewModel 語音服務（用於語音接單）
+    // 初始化 ViewModel 服務
     LaunchedEffect(driverId, driverName) {
+        viewModel.initSlowTrafficPersist(context)  // Phase C+1a：低速計時 DataStore 持久化
         viewModel.initVoiceServices(context, driverId, driverName)
         viewModel.initVoiceChat(context)  // 初始化語音對講
     }

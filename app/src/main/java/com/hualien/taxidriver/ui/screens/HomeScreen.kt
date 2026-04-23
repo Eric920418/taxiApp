@@ -189,8 +189,9 @@ fun HomeScreen(
         )
     }
 
-    // 初始化語音服務
+    // 初始化服務（idempotent，內部會跳過重複 init）
     LaunchedEffect(driverId, driverName) {
+        viewModel.initSlowTrafficPersist(context)  // Phase C+1a：低速計時 DataStore 持久化
         viewModel.initVoiceServices(context, driverId, driverName)
         viewModel.initVoiceChat(context)
     }
