@@ -11,6 +11,9 @@ plugins {
 
     // Firebase App Distribution plugin
     id("com.google.firebase.appdistribution")
+
+    // Google Play Publisher (Triple-T) — 自動上傳 AAB 到 Play Console
+    id("com.github.triplet.play")
 }
 
 // 讀取 keystore.properties
@@ -78,21 +81,12 @@ android {
             )
             signingConfig = signingConfigs.getByName("release")
 
-            // Firebase App Distribution 配置
+            // Firebase App Distribution 配置（目前不主用，主發布走 Play Console alpha）
+            // 留 plugin + 設定方便未來若要 dual-publish 內測 build。
+            // Release notes 跟 Play Console 共用同一檔，避免兩份維護偏差。
             firebaseAppDistribution {
                 artifactType = "APK"
-                releaseNotes = """
-                    v1.1.0 (beta19) — 費率對齊花蓮縣府公告 + rebrand
-
-                    1. 全面 rebrand：花蓮計程車 → GoGoCha（App 名稱 / Logo / About / 通知文案）
-                    2. 費率重構對齊花蓮縣府公告：
-                       - 日：起跳 100/1000m、每跳 5/230m、低速 120 秒/5 元
-                       - 夜 (22:00–06:00)：起跳 100/834m、每跳 5/192m、低速 100 秒/5 元
-                       - 春節：admin 設定後全日套夜費率 + 每趟加收 50 元
-                    3. 時區修復：計算統一用台北時區（Asia/Taipei），跨時區裝置不再算錯
-                    4. Firebase 登入失敗訊息加 actionable hint（SHA-1、配額、reCAPTCHA 提示）
-                    5. 司機端結算距離反推公式對齊新費率
-                """.trimIndent()
+                releaseNotesFile = "src/main/play/release-notes/zh-TW/default.txt"
                 // 測試者群組（需先在 Firebase Console → App Distribution → Testers & groups 建立此群組並加 testers）
                 // groups = "beta-testers"
             }
@@ -109,6 +103,35 @@ android {
         compose = true
         buildConfig = true
     }
+}
+
+// ==============================================================
+// Google Play Publisher (Triple-T) — 自動上傳 AAB 到 Play Console
+// ==============================================================
+// 用法：
+//   ./gradlew publishReleaseBundle    上傳 AAB 到 alpha 軌道並 completed（自動推出給 closed testers）
+//   ./gradlew publishReleaseApk       上傳 APK（不建議，AAB 才是 Play Store 標準）
+//   ./gradlew bootstrap                從 Play Console 拉現有 metadata 下來（一次性）
+//
+// Service account JSON：
+//   預設讀 ~/.gradle/play-console-service-account.json
+//   可用 env var PLAY_PUBLISHER_CREDENTIALS 指定別的路徑（CI/CD 用）
+//
+// Release notes：
+//   寫在 app/src/main/play/release-notes/zh-TW/default.txt（500 字內）
+//   要分軌道可建 alpha.txt / beta.txt / production.txt
+play {
+    val credentialsFile = file(
+        System.getenv("PLAY_PUBLISHER_CREDENTIALS")
+            ?: "${System.getProperty("user.home")}/.gradle/play-console-service-account.json"
+    )
+    if (credentialsFile.exists()) {
+        serviceAccountCredentials.set(credentialsFile)
+    }
+    track.set("alpha")
+    releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.COMPLETED)
+    defaultToAppBundles.set(true)
+    // promoteTrack 預設不變（只 publish 不自動 promote 到上一級軌道）
 }
 
 dependencies {

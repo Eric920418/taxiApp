@@ -9,4 +9,7 @@ plugins {
 
     // Firebase App Distribution plugin
     id("com.google.firebase.appdistribution") version "5.1.1" apply false
+
+    // Google Play Publisher (Triple-T) — 自動上傳 AAB 到 Play Console
+    id("com.github.triplet.play") version "3.12.1" apply false
 }
