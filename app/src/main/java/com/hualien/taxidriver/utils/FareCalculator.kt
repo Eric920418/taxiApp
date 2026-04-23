@@ -217,6 +217,57 @@ object FareCalculator {
     }
 
     /**
+     * 由總車資反推「估算距離」（公里）
+     *
+     * 用途：當行程沒有 tripDistance（乘客未指定目的地、現叫車）時，從司機輸入的
+     *      最終跳錶金額反推距離給「今日統計里程」用。**不適合用於精確計費**（反推
+     *      固有精度問題：fare = 105 可能跑 1001m～1230m 任一）。
+     *
+     * 演算法：
+     *   amount <= basePrice → 起跳距離
+     *   amount > basePrice  → baseDistance + jumps × jumpDistance
+     *                         （取「剛跳到第 N 跳」的距離 = 上界，貼近實際跑的距離）
+     *
+     * 限制：
+     *   - 假設 amount 不含春節加成、不含低速計時、不含其他 surcharge
+     *     呼叫端要先扣掉這些（目前 HomeViewModel 反推情境是裸跳錶，符合）
+     *   - 用 at 判斷套日/夜費率；at 預設 now，台北時區
+     */
+    fun estimateDistanceFromFare(
+        amount: Int,
+        at: ZonedDateTime = ZonedDateTime.now(TAIPEI),
+        config: FareConfig = currentConfig
+    ): Double {
+        val taipei = at.withZoneSameInstant(TAIPEI)
+        val isNight = isNightTime(taipei.toLocalTime(), config.night)
+        val isSpringFestival = isSpringFestival(taipei.toLocalDate(), config.springFestival)
+        val useNightSchedule = isSpringFestival || isNight
+
+        val basePrice: Int
+        val baseDistanceMeters: Int
+        val jumpDistanceMeters: Int
+        val jumpPrice: Int
+        if (useNightSchedule) {
+            basePrice = config.night.basePrice
+            baseDistanceMeters = config.night.baseDistanceMeters
+            jumpDistanceMeters = config.night.jumpDistanceMeters
+            jumpPrice = config.night.jumpPrice
+        } else {
+            basePrice = config.day.basePrice
+            baseDistanceMeters = config.day.baseDistanceMeters
+            jumpDistanceMeters = config.day.jumpDistanceMeters
+            jumpPrice = config.day.jumpPrice
+        }
+
+        if (amount <= basePrice) return baseDistanceMeters / 1000.0
+
+        val extraFare = amount - basePrice
+        val jumps = extraFare / jumpPrice  // 整數除法
+        val estimatedMeters = baseDistanceMeters + jumps * jumpDistanceMeters
+        return estimatedMeters / 1000.0
+    }
+
+    /**
      * 估算車資範圍（最小 = 日費率短程，最大 = 夜費率長程）
      */
     fun estimateFareRange(

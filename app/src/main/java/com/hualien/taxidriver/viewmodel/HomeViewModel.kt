@@ -720,17 +720,10 @@ class HomeViewModel : ViewModel() {
             val passengerName = currentOrder?.passengerName ?: "乘客"
 
             // 計算行程距離和時長
-            // 優先使用預估距離(tripDistance)，若無則用跳表金額反推（粗估，僅用於今日統計）
-            // 對齊花蓮縣府公告日費率：起跳 100/1000m + 5 元/230m
-            // 反推：distance(km) = 1.0 + max(0, (fare - 100) / 5) * 0.23
-            // TODO 未來在 FareCalculator 提供 estimateDistanceFromFare() 取代寫死反推
-            val distanceKm = currentOrder?.tripDistance ?: run {
-                if (meterAmount <= 100) {
-                    1.0
-                } else {
-                    1.0 + (meterAmount - 100) / 5.0 * 0.23
-                }
-            }
+            // 優先用預估距離(tripDistance)，若無則用 FareCalculator 由跳錶金額反推（粗估）
+            // 反推會自動依當下時間套日/夜費率，但不考慮春節 / 低速計時 surcharge
+            val distanceKm = currentOrder?.tripDistance
+                ?: com.hualien.taxidriver.utils.FareCalculator.estimateDistanceFromFare(meterAmount)
             val durationMinutes = currentOrder?.startedAt?.let { startedAt ->
                 ((System.currentTimeMillis() - startedAt) / 60000).toInt()
             }
