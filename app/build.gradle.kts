@@ -9,9 +9,6 @@ plugins {
     // Google Services plugin
     id("com.google.gms.google-services")
 
-    // Firebase App Distribution plugin
-    id("com.google.firebase.appdistribution")
-
     // Google Play Publisher (Triple-T) — 自動上傳 AAB 到 Play Console
     id("com.github.triplet.play")
 }
@@ -80,16 +77,6 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
-
-            // Firebase App Distribution 配置（目前不主用，主發布走 Play Console alpha）
-            // 留 plugin + 設定方便未來若要 dual-publish 內測 build。
-            // Release notes 跟 Play Console 共用同一檔，避免兩份維護偏差。
-            firebaseAppDistribution {
-                artifactType = "APK"
-                releaseNotesFile = "src/main/play/release-notes/zh-TW/default.txt"
-                // 測試者群組（需先在 Firebase Console → App Distribution → Testers & groups 建立此群組並加 testers）
-                // groups = "beta-testers"
-            }
         }
     }
     compileOptions {
