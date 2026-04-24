@@ -95,6 +95,47 @@ class OrderRepository {
     }
 
     /**
+     * 司機等候中：推播 LINE 提醒客人剩 N 分鐘會自動取消
+     */
+    suspend fun notifyPassengerWaiting(orderId: String, remainingMinutes: Int): Result<Unit> {
+        return try {
+            val response = apiService.notifyPassengerWaiting(
+                orderId = orderId,
+                request = com.hualien.taxidriver.data.remote.dto.NotifyWaitingRequest(
+                    remainingMinutes = remainingMinutes
+                )
+            )
+            if (response.isSuccessful) Result.success(Unit)
+            else Result.failure(Exception("等候提醒推播失敗：${response.message()}"))
+        } catch (e: Exception) {
+            Result.failure(Exception("網路錯誤：${e.message}"))
+        }
+    }
+
+    /**
+     * 客人未到：取消訂單並記錄 no-show
+     */
+    suspend fun cancelNoShow(
+        orderId: String,
+        driverId: String,
+        waitedMinutes: Int?
+    ): Result<Unit> {
+        return try {
+            val response = apiService.cancelNoShow(
+                orderId = orderId,
+                request = com.hualien.taxidriver.data.remote.dto.CancelNoShowRequest(
+                    driverId = driverId,
+                    waitedMinutes = waitedMinutes
+                )
+            )
+            if (response.isSuccessful) Result.success(Unit)
+            else Result.failure(Exception("標記 no-show 失敗：${response.message()}"))
+        } catch (e: Exception) {
+            Result.failure(Exception("網路錯誤：${e.message}"))
+        }
+    }
+
+    /**
      * 愛心卡確認/取消
      */
     suspend fun updateOrderSubsidy(

@@ -72,8 +72,32 @@ data class HomeUiState(
     val todayDistance: Double = 0.0,
     // 低速計時（駐車費）— SETTLING 時由 SlowTrafficTimer 提供，給 FareDialog 顯示「建議加收」
     // null 表示行程尚未結束或無資料
-    val slowTrafficSeconds: Int? = null
+    val slowTrafficSeconds: Int? = null,
+
+    // === 客人未到（no-show）等候計時 ===
+    // 司機按「客人未到」後啟動的倒數：null = 未啟動
+    val noShowWaitingStartedAt: Long? = null,     // 等候開始的 epoch millis
+    val noShowRemainingSeconds: Int? = null,      // 剩餘秒數（給 UI 顯示）
+    val noShowCancelling: Boolean = false         // 正在送取消 API（避免重複送）
 )
+
+/**
+ * 客人未到（no-show）等候政策
+ *
+ * 這些是業務決策常數，可隨產品調整：
+ *   - WAIT_TOTAL_SECONDS：司機按「客人未到」後，總共等候多久才自動取消
+ *   - REMINDER_POINTS_SECONDS：在還剩多少秒時各推播一則 LINE 提醒客人
+ *
+ * 注意：提醒點要從大到小，且不要超過 WAIT_TOTAL_SECONDS。
+ * 例：等候 300 秒，在「還剩 300/120/30 秒」各推一則，共 3 則 Push Message。
+ */
+object NoShowWaitingPolicy {
+    // 總等候時長（秒）— 預設 5 分鐘
+    const val WAIT_TOTAL_SECONDS = 5 * 60
+
+    // 剩餘多少秒時推播提醒（從大到小）— 預設：剛開始 / 還剩 2 分鐘 / 還剩 30 秒
+    val REMINDER_POINTS_SECONDS = intArrayOf(5 * 60, 2 * 60, 30)
+}
 
 /**
  * Home頁面ViewModel
@@ -82,6 +106,9 @@ class HomeViewModel : ViewModel() {
 
     private val repository = OrderRepository()
     private val webSocketManager = WebSocketManager.getInstance()
+
+    // 客人未到等候計時 — 獨立 job，方便 cancel
+    private var noShowWaitingJob: kotlinx.coroutines.Job? = null
 
     // 低速計時器（駐車費）— start() 在 ON_TRIP, stop() 在 SETTLING, snapshot 給 FareDialog
     private val slowTrafficTimer = SlowTrafficTimer()
@@ -650,6 +677,125 @@ class HomeViewModel : ViewModel() {
      */
     fun markArrived(orderId: String) {
         updateOrderStatus(orderId, "ARRIVED")
+    }
+
+    /**
+     * 開始「客人未到」等候倒數
+     *
+     * 流程：
+     *   1. 立刻推一則 LINE 給客人「司機正在等您，還有 N 分鐘」
+     *   2. 每秒更新剩餘秒數到 UI
+     *   3. 命中提醒點（REMINDER_POINTS_SECONDS）時再推一則 LINE
+     *   4. 倒數到 0 → 自動呼叫 cancelNoShow() 取消訂單
+     */
+    fun startNoShowWaiting(orderId: String, driverId: String) {
+        if (noShowWaitingJob != null) return // 已在等候中，不重複啟動
+
+        val startedAt = System.currentTimeMillis()
+        _uiState.value = _uiState.value.copy(
+            noShowWaitingStartedAt = startedAt,
+            noShowRemainingSeconds = NoShowWaitingPolicy.WAIT_TOTAL_SECONDS
+        )
+
+        noShowWaitingJob = viewModelScope.launch {
+            // 已推播過的提醒點（避免同一秒反覆推）
+            val notifiedPoints = mutableSetOf<Int>()
+            val reminderSet = NoShowWaitingPolicy.REMINDER_POINTS_SECONDS.toSet()
+
+            // 第一則：立刻推（剩餘 = 總時長）— 視為第一個提醒點
+            notifyWaitingAtPoint(orderId, NoShowWaitingPolicy.WAIT_TOTAL_SECONDS / 60)
+            notifiedPoints.add(NoShowWaitingPolicy.WAIT_TOTAL_SECONDS)
+
+            var remaining = NoShowWaitingPolicy.WAIT_TOTAL_SECONDS
+            while (remaining > 0) {
+                delay(1000)
+                remaining--
+                _uiState.value = _uiState.value.copy(noShowRemainingSeconds = remaining)
+
+                // 命中提醒點（且尚未推過）→ 推 LINE
+                if (reminderSet.contains(remaining) && !notifiedPoints.contains(remaining)) {
+                    val minutes = (remaining + 59) / 60 // 向上取整，避免「剩 0 分鐘」
+                    notifyWaitingAtPoint(orderId, minutes)
+                    notifiedPoints.add(remaining)
+                }
+            }
+
+            // 倒數結束 → 自動取消
+            _uiState.value = _uiState.value.copy(noShowCancelling = true)
+            val waitedMin = NoShowWaitingPolicy.WAIT_TOTAL_SECONDS / 60
+            repository.cancelNoShow(orderId, driverId, waitedMin)
+                .onSuccess {
+                    android.util.Log.d("NoShow", "✅ 客人未到 — 訂單 $orderId 已自動取消")
+                    _uiState.value = _uiState.value.copy(
+                        currentOrder = null,
+                        noShowWaitingStartedAt = null,
+                        noShowRemainingSeconds = null,
+                        noShowCancelling = false,
+                        driverStatus = DriverAvailability.AVAILABLE
+                    )
+                }
+                .onFailure { err ->
+                    android.util.Log.e("NoShow", "自動取消失敗: ${err.message}")
+                    _uiState.value = _uiState.value.copy(
+                        noShowCancelling = false,
+                        error = "取消訂單失敗：${err.message}"
+                    )
+                }
+            noShowWaitingJob = null
+        }
+    }
+
+    /**
+     * 推播等候提醒（純呼叫 API，吞錯誤）
+     */
+    private suspend fun notifyWaitingAtPoint(orderId: String, remainingMinutes: Int) {
+        repository.notifyPassengerWaiting(orderId, remainingMinutes)
+            .onFailure { android.util.Log.w("NoShow", "推播等候提醒失敗: ${it.message}") }
+    }
+
+    /**
+     * 客人到了（或司機決定繼續等）— 取消等候倒數，回到 ARRIVED 正常流程
+     */
+    fun cancelNoShowWaiting() {
+        noShowWaitingJob?.cancel()
+        noShowWaitingJob = null
+        _uiState.value = _uiState.value.copy(
+            noShowWaitingStartedAt = null,
+            noShowRemainingSeconds = null,
+            noShowCancelling = false
+        )
+    }
+
+    /**
+     * 司機手動立刻標記客人未到（不等倒數）
+     */
+    fun cancelNoShowNow(orderId: String, driverId: String) {
+        noShowWaitingJob?.cancel()
+        noShowWaitingJob = null
+
+        val waitedMin = _uiState.value.noShowWaitingStartedAt?.let { startedAt ->
+            ((System.currentTimeMillis() - startedAt) / 60000).toInt()
+        } ?: 0
+
+        _uiState.value = _uiState.value.copy(noShowCancelling = true)
+        viewModelScope.launch {
+            repository.cancelNoShow(orderId, driverId, waitedMin)
+                .onSuccess {
+                    _uiState.value = _uiState.value.copy(
+                        currentOrder = null,
+                        noShowWaitingStartedAt = null,
+                        noShowRemainingSeconds = null,
+                        noShowCancelling = false,
+                        driverStatus = DriverAvailability.AVAILABLE
+                    )
+                }
+                .onFailure { err ->
+                    _uiState.value = _uiState.value.copy(
+                        noShowCancelling = false,
+                        error = "取消失敗：${err.message}"
+                    )
+                }
+        }
     }
 
     /**

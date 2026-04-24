@@ -851,16 +851,99 @@ fun HomeScreen(
                         }
 
                         OrderStatus.ARRIVED -> {
-                            Button(
-                                onClick = { viewModel.startTrip(currentOrder.orderId) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(80.dp),
-                                enabled = !uiState.isLoading,
-                                colors = ButtonDefaults.buttonColors(containerColor = orderStatusColor(OrderStatus.ARRIVED)),
-                                shape = RoundedCornerShape(14.dp)
-                            ) {
-                                Text("開始行程", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                            val waitingSec = uiState.noShowRemainingSeconds
+                            val isWaiting = waitingSec != null
+
+                            if (isWaiting) {
+                                // ===== 等候倒數中 UI =====
+                                val mm = waitingSec!! / 60
+                                val ss = waitingSec % 60
+                                val timeText = String.format("%d:%02d", mm, ss)
+
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFF9800))
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = "等候客人中",
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE65100)
+                                        )
+                                        Text(
+                                            text = timeText,
+                                            fontSize = 52.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE65100)
+                                        )
+                                        Text(
+                                            text = "倒數結束自動取消，已通知客人",
+                                            fontSize = 14.sp,
+                                            color = SubText
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { viewModel.cancelNoShowNow(currentOrder.orderId, driverId) },
+                                        modifier = Modifier.weight(1f).height(72.dp),
+                                        enabled = !uiState.noShowCancelling,
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFE53935))
+                                    ) {
+                                        Text("立即取消", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE53935))
+                                    }
+                                    Button(
+                                        onClick = { viewModel.cancelNoShowWaiting() },
+                                        modifier = Modifier.weight(1.3f).height(72.dp),
+                                        enabled = !uiState.noShowCancelling,
+                                        colors = ButtonDefaults.buttonColors(containerColor = orderStatusColor(OrderStatus.ACCEPTED)),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Text("客人來了", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            } else {
+                                // ===== 正常 ARRIVED：主按鈕「開始行程」+ 次按鈕「客人未到」=====
+                                Button(
+                                    onClick = { viewModel.startTrip(currentOrder.orderId) },
+                                    modifier = Modifier.fillMaxWidth().height(80.dp),
+                                    enabled = !uiState.isLoading,
+                                    colors = ButtonDefaults.buttonColors(containerColor = orderStatusColor(OrderStatus.ARRIVED)),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Text("開始行程", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                OutlinedButton(
+                                    onClick = { viewModel.startNoShowWaiting(currentOrder.orderId, driverId) },
+                                    modifier = Modifier.fillMaxWidth().height(64.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFF9800))
+                                ) {
+                                    Text(
+                                        "客人未到？開始等候",
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE65100)
+                                    )
+                                }
                             }
                         }
 

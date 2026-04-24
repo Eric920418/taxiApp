@@ -131,6 +131,24 @@ interface ApiService {
     ): Response<OrderDto>
 
     /**
+     * 司機等候中：推播 LINE 提醒客人（剩 remainingMinutes 分鐘自動取消）
+     */
+    @POST("orders/{orderId}/notify-waiting")
+    suspend fun notifyPassengerWaiting(
+        @Path("orderId") orderId: String,
+        @Body request: NotifyWaitingRequest
+    ): Response<Unit>
+
+    /**
+     * 客人未到 — 取消訂單並記錄 no-show
+     */
+    @POST("orders/{orderId}/cancel-no-show")
+    suspend fun cancelNoShow(
+        @Path("orderId") orderId: String,
+        @Body request: CancelNoShowRequest
+    ): Response<Unit>
+
+    /**
      * 上傳車資結算
      * 返回 OrderDto 來處理 ISO 8601 日期格式
      */
