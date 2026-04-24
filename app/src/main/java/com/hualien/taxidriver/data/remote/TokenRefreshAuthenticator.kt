@@ -2,6 +2,8 @@ package com.hualien.taxidriver.data.remote
 
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
+import com.hualien.taxidriver.utils.AuthManager
+import com.hualien.taxidriver.utils.AuthState
 import com.hualien.taxidriver.utils.DataStoreManager
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
@@ -46,11 +48,10 @@ class TokenRefreshAuthenticator(
         val currentUser = firebaseAuth.currentUser
 
         if (currentUser == null) {
-            Log.e(TAG, "❌ 無法刷新 Token：用戶未登入")
-            // 用戶未登入，清除本地數據並強制重新登入
-            runBlocking {
-                dataStoreManager.clearLoginData()
-            }
+            Log.e(TAG, "❌ 無法刷新 Token：用戶未登入，觸發 forceLogoutBlocking")
+            // 走集中式登出流程（同時清 DataStoreManager、RoleManager、WebSocket、FCM）
+            // 修復舊版只清 DataStoreManager 導致 RoleManager.currentRole 殘留 DRIVER 的 bug
+            AuthManager.getInstance().forceLogoutBlocking("token_refresh_no_user")
             return null
         }
 
@@ -65,6 +66,15 @@ class TokenRefreshAuthenticator(
 
                     if (token.isNullOrEmpty()) {
                         Log.e(TAG, "❌ 刷新 Token 失敗：返回的 token 為空")
+                        return@runBlocking null
+                    }
+
+                    // Token 復活防護：若使用者在刷新期間登出，放棄寫回 token
+                    // 避免「登出後殘留 request 401 → 重新刷出 token → 寫回 DataStore」
+                    val authSnapshot = AuthManager.getInstance().authState.value
+                    if (authSnapshot is AuthState.Unauthenticated ||
+                        FirebaseAuth.getInstance().currentUser == null) {
+                        Log.w(TAG, "⚠️ 刷新期間使用者已登出，放棄寫回 token")
                         return@runBlocking null
                     }
 

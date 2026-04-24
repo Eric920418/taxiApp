@@ -18,9 +18,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.google.firebase.auth.FirebaseAuth
-import com.hualien.taxidriver.data.remote.WebSocketManager
 import com.hualien.taxidriver.domain.model.UserRole
+import com.hualien.taxidriver.utils.AuthManager
 import com.hualien.taxidriver.utils.RoleManager
 import com.hualien.taxidriver.viewmodel.PassengerProfileViewModel
 import kotlinx.coroutines.launch
@@ -329,18 +328,9 @@ fun PassengerProfileScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        scope.launch {
-                            // 1. 取消 WebSocket 重連並斷開連接
-                            val webSocketManager = WebSocketManager.getInstance()
-                            webSocketManager.cancelReconnect()
-                            webSocketManager.disconnect()
-
-                            // 2. 登出 Firebase Auth
-                            FirebaseAuth.getInstance().signOut()
-
-                            // 3. 清除 RoleManager 資料（回到角色選擇畫面）
-                            roleManager.logout()
-                        }
+                        // 清理邏輯集中在 AuthManager（含清 DataStore、Firebase signOut、RoleManager）
+                        // 修復舊版只清 RoleManager 導致「乘客登出 → 按我是司機 → 直接進舊帳號」的 bug
+                        scope.launch { AuthManager.getInstance().logout() }
                         showLogoutDialog = false
                     }
                 ) {

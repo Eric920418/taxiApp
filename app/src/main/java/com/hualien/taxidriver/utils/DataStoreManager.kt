@@ -85,6 +85,10 @@ class DataStoreManager private constructor(private val context: Context) {
     }
 
     // 獲取登錄狀態
+    @Deprecated(
+        message = "改用 AuthManager.authState 作為唯一真實來源；此 flag 僅為 legacy 快取，reconcileAtStartup 會自動清理",
+        replaceWith = ReplaceWith("AuthManager.getInstance().authState"),
+    )
     val isLoggedIn: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[KEY_IS_LOGGED_IN] ?: false
     }

@@ -22,10 +22,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.google.firebase.auth.FirebaseAuth
 import com.hualien.taxidriver.BuildConfig
-import com.hualien.taxidriver.data.remote.WebSocketManager
-import com.hualien.taxidriver.service.FcmTokenManager
+import com.hualien.taxidriver.utils.AuthManager
 import com.hualien.taxidriver.utils.DataStoreManager
 import com.hualien.taxidriver.utils.RoleManager
 import kotlinx.coroutines.launch
@@ -219,25 +217,10 @@ fun ProfileScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        // 清理邏輯集中在 AuthManager，內部用 Application scope 跑
+                        // UI（ProfileScreen）消失不會取消清理
                         coroutineScope.launch {
-                            // 1. 取消 WebSocket 重連並斷開連接
-                            val webSocketManager = WebSocketManager.getInstance()
-                            webSocketManager.cancelReconnect()
-                            webSocketManager.disconnect()
-
-                            // 2. 清除伺服器上的 FCM Token
-                            FcmTokenManager.clearTokenOnLogout(context, driverId)
-
-                            // 3. 登出 Firebase Auth
-                            FirebaseAuth.getInstance().signOut()
-
-                            // 4. 清除所有登錄數據
-                            dataStoreManager.clearLoginData()
-
-                            // 5. 清除 RoleManager 資料（回到角色選擇畫面）
-                            roleManager.logout()
-
-                            // 調用登出回調
+                            AuthManager.getInstance().logout()
                             onLogout()
                         }
                         showLogoutConfirmDialog = false

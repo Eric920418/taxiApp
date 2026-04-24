@@ -3,7 +3,52 @@
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
 > 版本：v1.2.1（beta21）| 更新日期：2026-04-24
 
-## 📝 最新更新（2026-04-23 ~ 04-24）- 費率對齊縣府公告 + Phase C 低速計時 + rebrand + 部署自動化
+## 📝 最新更新（2026-04-24）- Auth State Refactor：Firebase 為唯一真實來源
+
+### 問題
+使用者回報 **登出後從角色選擇頁按「我是司機」會直接進入舊帳號主畫面，跳過 OTP**。
+兩條路徑都能重現（司機端登出、乘客端登出）。
+
+### 根因：三個登入狀態來源彼此不同步
+- `FirebaseAuth.currentUser`（真正的 session）
+- `DataStoreManager.isLoggedIn / driverId`（本地快取）
+- `RoleManager.currentRole / userId`（另一組本地快取）
+
+AppContent 原本用 `DataStoreManager.isLoggedIn` 判斷「已登入」，只要這個 flag 沒被清乾淨就誤判。具體 bug：
+1. `PassengerProfileScreen` 登出漏呼叫 `dataStoreManager.clearLoginData()`
+2. `TokenRefreshAuthenticator` 401 強制登出只清 DataStoreManager，沒清 RoleManager
+3. Token 復活風險：登出後殘留 request 401 時可能刷出新 token 寫回 DataStore
+4. `ProfileScreen` 登出用 `rememberCoroutineScope()`，UI 消失就 cancel，後續清理步驟可能來不及跑
+
+### 解法：集中化登出 + Firebase 為 SoT
+**新增 `utils/AuthManager.kt`**（Singleton）：
+- `authState: StateFlow<AuthState>` 用 `FirebaseAuth.AuthStateListener` 包成 `callbackFlow` + `stateIn(Eagerly, Loading)`
+- `logout()` / `forceLogoutBlocking(reason)` — 集中清理順序：WS → FCM（3s timeout）→ Firebase.signOut → DataStore → RoleManager
+- 內部用 **Application-scoped `SupervisorJob + Dispatchers.IO`**，UI 消失不會取消登出
+- `reconcileAtStartup()` — 修復上次 App 被殺造成的 orphan 狀態
+
+**`AppContent` 重構**（`MainActivity.kt`）：司機與乘客判斷對稱，都看 `AuthManager.authState`；`Loading` 狀態顯示 CircularProgressIndicator 避免閃過登入畫面。
+
+**登出呼叫點統一**：`ProfileScreen` / `PassengerProfileScreen` 原本 4-6 步手動清理整坨刪掉，改成單呼叫 `AuthManager.getInstance().logout()`。
+
+**TokenRefreshAuthenticator 修補**：`currentUser==null` 改呼叫 `forceLogoutBlocking`；`updateToken` 前加 token 復活防護（檢查 `authState.value` 與 `currentUser`）。
+
+**`DataStoreManager.isLoggedIn`** 標 `@Deprecated`（保留不刪，方便 rollback），僅 `AuthManager.reconcileAtStartup` 讀取（偵測 orphan）。
+
+### 影響檔案
+- 新增：`utils/AuthManager.kt`
+- 修改：`MainActivity.kt`（init + AppContent）、`ProfileScreen.kt`、`passenger/PassengerProfileScreen.kt`、`data/remote/TokenRefreshAuthenticator.kt`、`utils/DataStoreManager.kt`（標 deprecated）
+
+### 驗證場景
+- 司機端登出 → 角色選擇 → 我是司機 → **OTP 頁面**（非主畫面）✓
+- 乘客端登出 → 角色選擇 → 我是司機 → **OTP 頁面**（非主畫面）✓
+- App 殺掉重啟（已登入）→ 直接進主畫面，不閃登入畫面
+- 斷網登出 → 3 秒內完成，FCM timeout 不卡流程
+- 401 + `currentUser=null` → 走 `forceLogoutBlocking`，不死循環
+
+---
+
+## 📝 歷史更新（2026-04-23 ~ 04-24）- 費率對齊縣府公告 + Phase C 低速計時 + rebrand + 部署自動化
 
 > 本 session 連動 server commits（費率 schema 重構、時區修正、Layer 1/2 防護網、BullMQ migration），詳見 server repo README。
 

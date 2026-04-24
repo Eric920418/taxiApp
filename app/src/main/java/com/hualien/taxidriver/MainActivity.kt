@@ -31,6 +31,8 @@ import com.hualien.taxidriver.ui.screens.auth.DriverPhoneLoginScreen
 import com.hualien.taxidriver.ui.screens.auth.PassengerPhoneLoginScreen
 import com.hualien.taxidriver.ui.screens.common.RoleSelectionScreen
 import com.hualien.taxidriver.ui.theme.HualienTaxiDriverTheme
+import com.hualien.taxidriver.utils.AuthManager
+import com.hualien.taxidriver.utils.AuthState
 import com.hualien.taxidriver.utils.DataStoreManager
 import com.hualien.taxidriver.utils.PassengerNotificationHelper
 import com.hualien.taxidriver.utils.RoleManager
@@ -54,13 +56,19 @@ class MainActivity : ComponentActivity() {
         dataStoreManager = DataStoreManager.getInstance(this)
         roleManager = RoleManager(this)
 
+        // 初始化認證管理器（必須晚於 DataStoreManager / RoleManager）
+        // Firebase Auth 為唯一真實來源；本地 DataStore 降為營運資料快取
+        AuthManager.init(this, dataStoreManager, roleManager)
+
         // 初始化乘客通知頻道（司機到達通知等）
         PassengerNotificationHelper.createNotificationChannels(this)
 
         // 初始化 token 緩存（避免 AuthInterceptor 使用 runBlocking）
+        // reconcileAtStartup 修復上次 App 被殺或登出流程中斷的不一致狀態
         // 同時從 Server 載入費率配置
         lifecycleScope.launch {
             dataStoreManager.initializeTokenCache()
+            AuthManager.getInstance().reconcileAtStartup()
             // 從 Server 載入費率配置（失敗時使用預設值）
             FareCalculator.loadConfigFromServer()
         }
@@ -79,82 +87,98 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppContent(dataStoreManager: DataStoreManager, roleManager: RoleManager) {
-    // 從 RoleManager 讀取角色和用戶信息
-    val currentRole by roleManager.currentRole.collectAsState(initial = null)
-    val userId by roleManager.userId.collectAsState(initial = null)
-    val userName by roleManager.userName.collectAsState(initial = null)
-    val userPhone by roleManager.userPhone.collectAsState(initial = null)
+    // Firebase Auth 為唯一真實來源
+    val authState by AuthManager.getInstance().authState.collectAsState()
 
-    // 從 DataStoreManager 讀取司機登入狀態（向後兼容）
-    val isDriverLoggedIn by dataStoreManager.isLoggedIn.collectAsState(initial = false)
+    // 角色選擇（與 auth state 正交，決定進司機端還是乘客端 UI）
+    val currentRole by roleManager.currentRole.collectAsState(initial = null)
+
+    // 營運資料快取（僅用於 UI 顯示，不參與已登入判斷）
     val driverId by dataStoreManager.driverId.collectAsState(initial = null)
     val driverName by dataStoreManager.driverName.collectAsState(initial = null)
+    val passengerId by roleManager.userId.collectAsState(initial = null)
+    val passengerName by roleManager.userName.collectAsState(initial = null)
+    val passengerPhone by roleManager.userPhone.collectAsState(initial = null)
 
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {
-        when {
-            // 情況1: 沒有選擇角色 → 顯示角色選擇畫面
-            currentRole == null -> {
-                val scope = rememberCoroutineScope()
-                RoleSelectionScreen(
-                    onRoleSelected = { role ->
-                        // 保存選擇的角色
-                        scope.launch {
-                            roleManager.switchRole(role)
-                            // 狀態更新後會自動重組，進入對應的登入流程
-                        }
-                    }
-                )
-            }
-
-            // 情況2: 選擇乘客角色
-            currentRole == UserRole.PASSENGER -> {
-                if (!userId.isNullOrEmpty()) {
-                    // 已登入 → 顯示乘客導航
-                    PassengerNavigation(
-                        passengerId = userId ?: "",
-                        passengerName = userName ?: "",
-                        passengerPhone = userPhone ?: "",
-                        roleManager = roleManager,
-                        onSwitchToDriver = {
-                            // 切換到司機角色後會自動重組
-                        }
-                    )
-                } else {
-                    // 未登入 → 顯示乘客簡訊登入畫面
-                    PassengerPhoneLoginScreen(
-                        roleManager = roleManager,
-                        onLoginSuccess = {
-                            // 狀態會自動更新
-                        }
-                    )
+        when (val auth = authState) {
+            is AuthState.Loading -> {
+                // AuthStateListener 首次回呼前的過渡狀態，避免閃過登入畫面
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
                 }
             }
 
-            // 情況3: 選擇司機角色
-            currentRole == UserRole.DRIVER -> {
-                if (isDriverLoggedIn && !driverId.isNullOrEmpty()) {
-                    // 已登入 → 顯示司機導航
-                    MainNavigation(
-                        driverId = driverId ?: "",
-                        driverName = driverName ?: "",
-                        dataStoreManager = dataStoreManager,
-                        roleManager = roleManager,
-                        onLogout = {
-                            // 登出將在 MainNavigation 中處理
+            is AuthState.Unauthenticated -> when (currentRole) {
+                null -> {
+                    val scope = rememberCoroutineScope()
+                    RoleSelectionScreen(
+                        onRoleSelected = { role ->
+                            scope.launch { roleManager.switchRole(role) }
                         }
                     )
-                } else {
-                    // 未登入 → 顯示司機簡訊登入畫面
-                    DriverPhoneLoginScreen(
-                        dataStoreManager = dataStoreManager,
-                        roleManager = roleManager,
-                        onLoginSuccess = {
-                            // 狀態會自動更新
+                }
+                UserRole.DRIVER -> DriverPhoneLoginScreen(
+                    dataStoreManager = dataStoreManager,
+                    roleManager = roleManager,
+                    onLoginSuccess = {}
+                )
+                UserRole.PASSENGER -> PassengerPhoneLoginScreen(
+                    roleManager = roleManager,
+                    onLoginSuccess = {}
+                )
+            }
+
+            is AuthState.Authenticated -> when (currentRole) {
+                null -> {
+                    // Firebase 已登入但未選角色（極少見，reconcile 後通常不會到這裡）
+                    val scope = rememberCoroutineScope()
+                    RoleSelectionScreen(
+                        onRoleSelected = { role ->
+                            scope.launch { roleManager.switchRole(role) }
                         }
                     )
+                }
+                UserRole.DRIVER -> {
+                    if (driverId.isNullOrEmpty()) {
+                        // Firebase 有 session 但本地司機快取缺失 → 走登入流程補資料
+                        // （正常情況下 reconcileAtStartup 會攔截，這裡是防守）
+                        DriverPhoneLoginScreen(
+                            dataStoreManager = dataStoreManager,
+                            roleManager = roleManager,
+                            onLoginSuccess = {}
+                        )
+                    } else {
+                        MainNavigation(
+                            driverId = driverId ?: "",
+                            driverName = driverName ?: "",
+                            dataStoreManager = dataStoreManager,
+                            roleManager = roleManager,
+                            onLogout = {}
+                        )
+                    }
+                }
+                UserRole.PASSENGER -> {
+                    if (passengerId.isNullOrEmpty()) {
+                        PassengerPhoneLoginScreen(
+                            roleManager = roleManager,
+                            onLoginSuccess = {}
+                        )
+                    } else {
+                        PassengerNavigation(
+                            passengerId = passengerId ?: "",
+                            passengerName = passengerName ?: "",
+                            passengerPhone = passengerPhone ?: "",
+                            roleManager = roleManager,
+                            onSwitchToDriver = {}
+                        )
+                    }
                 }
             }
         }
