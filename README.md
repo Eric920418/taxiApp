@@ -1,9 +1,91 @@
-# 花蓮計程車 - 雙模式 Android App
+# GoGoCha - 雙模式 Android App
 
-> **HualienTaxiDriver** - 司機端 + 乘客端統一應用程式
-> 版本：v1.10.0-MVP（beta15）| 更新日期：2026-04-19
+> **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
+> 版本：v1.2.1（beta21）| 更新日期：2026-04-24
 
-## 📝 最新更新（2026-04-19）- 地標動態同步
+## 📝 最新更新（2026-04-23 ~ 04-24）- 費率對齊縣府公告 + Phase C 低速計時 + rebrand + 部署自動化
+
+> 本 session 連動 server commits（費率 schema 重構、時區修正、Layer 1/2 防護網、BullMQ migration），詳見 server repo README。
+
+### 1. Rebrand：花蓮計程車 → GoGoCha
+全面改名 12 處 UI / Service / About Dialog / 隱私政策：
+- `strings.xml` `app_name` → GoGoCha
+- 司機端 / 乘客端 LoginScreen logo 文字
+- `RoleSelectionScreen` 標題
+- `ProfileScreen` / `PassengerSettingsScreen` About Dialog
+- `LocationService` 前景通知標題
+- `TaxiFirebaseMessagingService` 推播預設標題
+- `PassengerNotificationHelper` 結帳通知文案
+- 版權年份 2024 → 2026
+- README 隱私政策 HTML block
+
+順便 `PhoneAuthViewModel` 加 Firebase 登入錯誤的 actionable hint：
+ERROR_APP_NOT_AUTHORIZED → 提示加 SHA-1、ERROR_QUOTA_EXCEEDED → 提示升 Blaze 方案。
+
+### 2. 費率對齊花蓮縣府公告（雙端）
+Server schema 重構 + admin UI 重做（詳見 server repo README）。Android 端：
+- `FareConfigDto.kt` 改成巢狀 `DayFareDto` / `NightFareDto` / `SpringFestivalDto`
+- `FareCalculator.kt` 完全重寫：日/夜/春節三組 schedule，移除 `nightSurchargeRate`
+- 預設值對齊公告：日 100/1000m + 5/230m + 120s/5、夜 100/834m + 5/192m + 100s/5
+- 時區修正：改用 `ZonedDateTime.now(Asia/Taipei)`，跨時區裝置不再算錯
+- `PassengerHomeScreen` 顯示文案改「夜間時段已套用夜間費率」/ 春節「+50 元」
+- `HomeViewModel.submitFare` 距離反推改用 `FareCalculator.estimateDistanceFromFare()`，
+  取代寫死的 `1.25 + (fare-100)/25` anti-pattern
+
+### 3. Phase C — 低速計時（駐車費）GPS 整合 MVP
+新功能：行程中車速 < 5 km/h 累計秒數，到結算 FareDialog 顯示「建議加收 NT$ X」。
+- 新建 `utils/SlowTrafficTimer.kt`（純 Kotlin state machine，無 Android 依賴）
+- `LocationService.kt` 暴露 `speedFlow: StateFlow<Float?>` —
+  在 `onLocationResult` 最早期 emit speed（在 displacement filter **之前**），
+  否則車輛靜止時 `shouldUpdateLocation` 過濾會吞掉 speed sample → 累計永遠 0
+- `HomeViewModel` `init {}` 訂閱 speedFlow → `slowTrafficTimer.onSpeedUpdate(speed)`
+- `startTrip` → `timer.start(orderId)`、`endTrip` → `timer.stop() + snapshot`
+- `FareDialog` 多接 `slowTrafficSeconds` / `slowTrafficSuggestedFare`，顯示橘色建議列
+- 三個 screen 都傳值（HomeScreen / SimplifiedDriverScreen / SeniorFriendlyHomeScreen）
+- `FareCalculator.suggestSlowTrafficFare()` 統一計算建議金額（依當下時間套日/夜 schedule）
+
+### 4. Phase C+1a — DataStore 持久化低速計時
+補完 Phase C MVP 唯一漏洞：原本累計值純記憶體，App 被殺/閃退會丟。
+- `DataStoreManager.kt` 新增 `saveIdleSeconds` / `getIdleSeconds` / `clearIdleSeconds`
+  （key pattern `idle_seconds_$orderId`，按 orderId 索引避免不同訂單混淆）
+- `SlowTrafficTimer` 加 `onPersist: ((orderId, seconds) -> Unit)?` callback
+  + 5 秒 throttle（避免高頻 GPS update 寫爆 disk）
+- `HomeViewModel` 新增 `initSlowTrafficPersist(context)` — UI 第一次 init 時呼叫
+- `fetchActiveOrder()` 恢復 ON_TRIP 訂單時從 DataStore 讀回累計值繼續計時
+- `submitFare` 成功後 `dataStoreManager.clearIdleSeconds(orderId)` 清紀錄
+
+### 5. 部署自動化：Triple-T Play Publisher
+之前發布是手動拖 AAB 到 Play Console UI，4-5 步。改用 `com.github.triplet.play` 3.12.1：
+- `pnpm/gradle add com.github.triplet.play`
+- `app/build.gradle.kts` 加 `play {}` block：track=alpha, releaseStatus=COMPLETED, defaultToAppBundles=true
+- Service account JSON 放 `~/.gradle/play-console-service-account.json`（不進 repo）
+- Release notes 移到檔案 `app/src/main/play/release-notes/zh-TW/default.txt`（500 字內）
+- `./gradlew publishReleaseBundle` 一行上傳 AAB → Play Console alpha 軌道 → 自動推給 closed testers
+
+順手清理：移除 `com.google.firebase.appdistribution` plugin（已不主用，避免誤導）
+
+### 影響檔案總覽
+- 新增：`utils/SlowTrafficTimer.kt`、`app/src/main/play/release-notes/zh-TW/default.txt`
+- 重寫：`utils/FareCalculator.kt`、`data/remote/dto/FareConfigDto.kt`
+- 改動：`viewmodel/HomeViewModel.kt`、`utils/DataStoreManager.kt`、`service/LocationService.kt`、
+  `viewmodel/PhoneAuthViewModel.kt`、`ui/components/FareDialog.kt`、3 個 Screen、
+  `MainActivity.kt`、`service/TaxiFirebaseMessagingService.kt`、`ProfileScreen.kt`、
+  `auth/DriverPhoneLoginScreen.kt` / `PassengerPhoneLoginScreen.kt`、`RoleSelectionScreen.kt`、
+  `PassengerSettingsScreen.kt`、`PassengerNotificationHelper.kt`、`strings.xml`
+- Build：`build.gradle.kts`、`app/build.gradle.kts`、`.gitignore`
+- 刪除：Firebase App Distribution plugin 相關設定
+
+### 後續發布流程（給未來的你）
+```bash
+# 1. 改 code → bump versionCode + 改 release notes
+# 2. 一指令發布
+./gradlew publishReleaseBundle
+# 自動 build AAB + 上傳 Play Console alpha + 推給 closed testers
+```
+
+---
+
+## 📝 歷史更新（2026-04-19）- 地標動態同步
 
 ### 問題
 App 端 `HualienLocalAddressDB.kt`（97 筆 hardcoded）每次要加新地標（例如 commit 73cad31「好樂迪、三角形餐酒館」）都要改 Kotlin 重新發 APK，運營沒辦法自己維護。
@@ -645,7 +727,7 @@ export default router
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>花蓮計程車 — 隱私政策</title>
+<title>GoGoCha — 隱私政策</title>
 <style>
   body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; max-width: 780px; margin: 40px auto; padding: 0 20px; line-height: 1.7; color: #222; }
   h1 { border-bottom: 2px solid #FFC107; padding-bottom: 8px; }
@@ -658,10 +740,10 @@ export default router
 </style>
 </head>
 <body>
-<h1>花蓮計程車 隱私政策</h1>
-<p class="meta">最後更新：2026-04-21｜生效日：2026-04-21</p>
+<h1>GoGoCha 隱私政策</h1>
+<p class="meta">最後更新：2026-04-23｜生效日：2026-04-23</p>
 
-<p>花蓮計程車 App（以下稱「本服務」）由 Eric 個人開發者 營運，提供花蓮地區計程車叫車媒合服務。本政策說明我們如何蒐集、使用、儲存與保護您的個人資料。</p>
+<p>GoGoCha App（前稱「花蓮計程車」，以下稱「本服務」）由 Eric 個人開發者 營運，提供花蓮地區計程車叫車媒合服務。本政策說明我們如何蒐集、使用、儲存與保護您的個人資料。</p>
 
 <h2>1. 我們蒐集的資料</h2>
 <table>

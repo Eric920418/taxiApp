@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-花蓮計程車雙模式 Android App — 司機端與乘客端統一在單一 APK 中，透過 `RoleManager` 在啟動時決定進入哪端的導航圖。
+GoGoCha（前稱「花蓮計程車」）雙模式 Android App — 司機端與乘客端統一在單一 APK 中，透過 `RoleManager` 在啟動時決定進入哪端的導航圖。
 
 - **語言**: Kotlin, **UI**: Jetpack Compose + Material3
 - **架構**: MVVM（無 DI 框架，手動管理依賴）
@@ -25,9 +25,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./gradlew build                  # 建置專案
 ./gradlew installDebug           # 安裝 Debug APK 到裝置
 ./gradlew assembleRelease        # 建置 Release APK（需 keystore.properties）
+./gradlew bundleRelease          # 建置 Release AAB（Play Console 用）
 ./gradlew clean                  # 清理建置
-./gradlew signingReport          # 取得 SHA-256（Firebase 需要）
-./gradlew appDistributionUploadRelease  # 上傳到 Firebase App Distribution
+./gradlew signingReport          # 取得 SHA-256（Firebase Auth 用）
+./gradlew publishReleaseBundle   # Triple-T：build AAB + 上 Play Console alpha + 自動推 testers
 ```
 
 沒有實質的單元測試或 instrumentation 測試（只有 Android Studio 生成的 stub）。
@@ -90,7 +91,11 @@ Firebase ID Token 有效期 1 小時，`TokenRefreshAuthenticator` 透過 OkHttp
 - **compileSdk / targetSdk**: 36, **minSdk**: 26
 - **Release**: 啟用 R8 minify + shrinkResources，ProGuard 規則在 `proguard-rules.pro`
 - **Signing**: 從 `keystore.properties` 讀取，keystore 檔在 `app/release-keystore.jks`
-- **Firebase App Distribution**: Release 建置自動配置，測試群組 `beta-testers`
+- **發布管道**: **Triple-T Play Publisher** (`com.github.triplet.play`) → Play Console alpha 軌道
+  - Service account JSON 放 `~/.gradle/play-console-service-account.json`（不進 repo）
+  - Release notes 寫在 `app/src/main/play/release-notes/zh-TW/default.txt`（500 字內）
+  - 一鍵發布：`./gradlew publishReleaseBundle`
+  - Firebase App Distribution plugin 已移除（2026-04-23），不再使用
 - **版本號**: `app/build.gradle.kts` 中的 `versionCode` / `versionName`
 
 ## WebSocket 事件速查
