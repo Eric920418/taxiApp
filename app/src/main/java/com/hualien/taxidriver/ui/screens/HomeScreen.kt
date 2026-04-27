@@ -524,6 +524,42 @@ fun HomeScreen(
                             )
                         }
 
+                        // ===== 6. 客人備註（LIFF 叫車時填寫）=====
+                        // 醒目橘底卡片：例「老人家腳不便請多等」「有行李箱」「大狗同行」
+                        // 司機看到這資訊就知道要做哪些準備
+                        if (!currentOrder.notes.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(2.dp, Color(0xFFFF9800))
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Text("📝", fontSize = 22.sp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = "客人備註",
+                                            fontSize = 14.sp,
+                                            color = Color(0xFFE65100),
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = currentOrder.notes,
+                                            fontSize = 18.sp,
+                                            color = Color(0xFF212121),
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         // 距離和時間資訊（字體放大）
                         if (currentOrder.distanceToPickup != null || currentOrder.tripDistance != null || currentOrder.estimatedFare != null) {
                             Spacer(modifier = Modifier.height(4.dp))

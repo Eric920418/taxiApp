@@ -158,7 +158,14 @@ data class Order(
 
     /** 3CX 通話 ID */
     @SerializedName("callId")
-    val callId: String? = null
+    val callId: String? = null,
+
+    /**
+     * 客人備註（LIFF 叫車時填寫，例如「老人家腳不便請多等」「有行李箱」「大狗同行」）
+     * 對司機特別重要 — 知道要幫忙下車 / 開後車廂 / 心理準備
+     */
+    @SerializedName("notes")
+    val notes: String? = null
 ) {
     /**
      * 取得狀態enum

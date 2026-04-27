@@ -231,7 +231,9 @@ data class OrderDto(
     @SerializedName("destinationConfirmed")
     val destinationConfirmed: Boolean? = null,
     @SerializedName("callId")
-    val callId: String? = null
+    val callId: String? = null,
+    @SerializedName("notes")
+    val notes: String? = null
 ) {
     /**
      * 將 ISO 8601 日期字串轉換為時間戳（毫秒）
@@ -329,7 +331,8 @@ data class OrderDto(
             petNote = petNote,
             customerPhone = customerPhone,
             destinationConfirmed = destinationConfirmed ?: false,
-            callId = callId
+            callId = callId,
+            notes = notes
         )
     }
 }
