@@ -29,7 +29,9 @@ import com.hualien.taxidriver.navigation.MainNavigation
 import com.hualien.taxidriver.navigation.PassengerNavigation
 import com.hualien.taxidriver.ui.screens.auth.DriverPhoneLoginScreen
 import com.hualien.taxidriver.ui.screens.auth.PassengerPhoneLoginScreen
+import com.hualien.taxidriver.ui.screens.auth.WelcomeLoginScreen
 import com.hualien.taxidriver.ui.screens.common.RoleSelectionScreen
+import com.hualien.taxidriver.ui.screens.common.SplashScreen
 import com.hualien.taxidriver.ui.theme.HualienTaxiDriverTheme
 import com.hualien.taxidriver.utils.AuthManager
 import com.hualien.taxidriver.utils.AuthState
@@ -87,6 +89,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppContent(dataStoreManager: DataStoreManager, roleManager: RoleManager) {
+    // 啟動封面（GoGoCha cover）— 顯示完才進入實際路由
+    var splashDone by remember { mutableStateOf(false) }
+    if (!splashDone) {
+        SplashScreen(onFinished = { splashDone = true })
+        return
+    }
+
     // Firebase Auth 為唯一真實來源
     val authState by AuthManager.getInstance().authState.collectAsState()
 
@@ -115,24 +124,50 @@ fun AppContent(dataStoreManager: DataStoreManager, roleManager: RoleManager) {
                 }
             }
 
-            is AuthState.Unauthenticated -> when (currentRole) {
+            is AuthState.Unauthenticated -> when (val role = currentRole) {
                 null -> {
                     val scope = rememberCoroutineScope()
                     RoleSelectionScreen(
-                        onRoleSelected = { role ->
-                            scope.launch { roleManager.switchRole(role) }
+                        onRoleSelected = { selected ->
+                            scope.launch { roleManager.switchRole(selected) }
                         }
                     )
                 }
-                UserRole.DRIVER -> DriverPhoneLoginScreen(
-                    dataStoreManager = dataStoreManager,
-                    roleManager = roleManager,
-                    onLoginSuccess = {}
-                )
-                UserRole.PASSENGER -> PassengerPhoneLoginScreen(
-                    roleManager = roleManager,
-                    onLoginSuccess = {}
-                )
+                else -> {
+                    // Welcome 歡迎頁 → 點「登錄」才進手機 OTP 流程
+                    // 切換角色（currentRole 變化）時 welcomeContinued 自動 reset
+                    var welcomeContinued by remember(role) { mutableStateOf(false) }
+                    val scope = rememberCoroutineScope()
+
+                    if (!welcomeContinued) {
+                        WelcomeLoginScreen(
+                            role = role,
+                            onContinue = { welcomeContinued = true },
+                            onSwitchRole = {
+                                scope.launch {
+                                    roleManager.switchRole(
+                                        if (role == UserRole.DRIVER) UserRole.PASSENGER
+                                        else UserRole.DRIVER
+                                    )
+                                }
+                            },
+                            onBack = {
+                                // 清角色回到 RoleSelectionScreen
+                                scope.launch { roleManager.logout() }
+                            }
+                        )
+                    } else when (role) {
+                        UserRole.DRIVER -> DriverPhoneLoginScreen(
+                            dataStoreManager = dataStoreManager,
+                            roleManager = roleManager,
+                            onLoginSuccess = {}
+                        )
+                        UserRole.PASSENGER -> PassengerPhoneLoginScreen(
+                            roleManager = roleManager,
+                            onLoginSuccess = {}
+                        )
+                    }
+                }
             }
 
             is AuthState.Authenticated -> when (currentRole) {

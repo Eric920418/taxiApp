@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.HualienTaxiDriver" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- 啟動瞬間白底，避免從黑底閃跳到 Compose splash 白底 -->
+    <style name="Theme.HualienTaxiDriver" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
 </resources>

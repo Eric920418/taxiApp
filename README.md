@@ -1,9 +1,47 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.2.1（beta21）| 更新日期：2026-04-24
+> 版本：v1.2.1（beta21）| 更新日期：2026-05-02
 
-## 📝 最新更新（2026-04-24）- Auth State Refactor：Firebase 為唯一真實來源
+## 📝 最新更新（2026-05-02）- 啟動封面 + 登入歡迎頁
+
+### 1. 啟動封面（GoGoCha cover）
+進入 App 時，Android 12+ 系統預設 SplashScreen 會顯示 `@mipmap/ic_launcher`（黑底 launcher 圖示），毫無品牌識別。
+解法：
+- **新增啟動封面圖**：`app/src/main/res/drawable-nodpi/splash_cover.jpg`（GoGoCha logo + 圖釘 + 黃車 + slogan，白底）。放 `drawable-nodpi/` 避免被當 mdpi 在高 dpi 螢幕被放大。
+- **新增 `SplashScreen` Composable**：`ui/screens/common/SplashScreen.kt`，整張封面 ContentScale.Fit + 白底；停留 1500ms 後 fade out 350ms。
+- **`AppContent` 入口加 `splashDone` 旗標**：splash 結束才走原本的 `authState × currentRole` 路由。
+- **`themes.xml` 加 `windowBackground=@android:color/white`**：讓系統 splash 的 0.3s 從白底開始，不要黑閃。
+
+封面圖把文字點陣化在 JPG 內，做多語系（英／日）需重畫。未來升級路徑：logo 區切獨立向量圖、文字改 Compose `Text` 渲染。
+
+### 2. 登入歡迎頁（Welcome → OTP）
+原本選完角色後直接進手機 OTP 輸入頁，缺少品牌識別。
+新流程：
+```
+Splash (1.5s)
+  → RoleSelectionScreen (選司機/乘客)
+  → WelcomeLoginScreen (歡迎頁，新增) — 黃色「登錄」按鈕 + 角色頭像
+  → DriverPhoneLoginScreen / PassengerPhoneLoginScreen (現有手機 OTP)
+```
+
+WelcomeLoginScreen（`ui/screens/auth/WelcomeLoginScreen.kt`）特點：
+- 上半部弧形白色卡片（`RoundedCornerShape(bottomStart=240.dp, bottomEnd=240.dp)`）內含 GoGoCha logo + slogan
+- 中下黃色漸層大按鈕（`Brush.horizontalGradient`，#FFC107 → #FFB300）含「登錄」+ 右箭頭
+- 右下角圓形角色頭像：依 `currentRole` 顯示 `DirectionsCar`（司機）或 `Person`（乘客），**點擊切換角色**（`roleManager.switchRole(other)`）
+- 系統返回鍵 → `roleManager.logout()` 清角色回到 RoleSelectionScreen
+- `welcomeContinued` 用 `remember(role)` — 切角色時自動 reset 重新顯示歡迎頁
+
+僅套用在 `Unauthenticated` 路徑。`Authenticated × empty cache` 的防守 fallback 直接進 OTP 補資料，不過 Welcome（屬異常路徑）。
+
+### 影響檔案
+- `app/src/main/res/drawable-nodpi/splash_cover.jpg`（新）
+- `app/src/main/java/com/hualien/taxidriver/ui/screens/common/SplashScreen.kt`（新）
+- `app/src/main/java/com/hualien/taxidriver/ui/screens/auth/WelcomeLoginScreen.kt`（新）
+- `app/src/main/java/com/hualien/taxidriver/MainActivity.kt`（`AppContent` 加 splash gate + Welcome step）
+- `app/src/main/res/values/themes.xml`（windowBackground 改白）
+
+## 📝 歷史更新（2026-04-24）- Auth State Refactor：Firebase 為唯一真實來源
 
 ### 問題
 使用者回報 **登出後從角色選擇頁按「我是司機」會直接進入舊帳號主畫面，跳過 OTP**。
