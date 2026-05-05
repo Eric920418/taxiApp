@@ -79,6 +79,10 @@ class WebSocketManager private constructor() {
     private val _orderUrge = MutableStateFlow<OrderUrgeInfo?>(null)
     val orderUrge: StateFlow<OrderUrgeInfo?> = _orderUrge.asStateFlow()
 
+    // LINE 客人重發位置（透過 LIFF relocate）
+    private val _pickupUpdated = MutableStateFlow<PickupUpdateInfo?>(null)
+    val pickupUpdated: StateFlow<PickupUpdateInfo?> = _pickupUpdated.asStateFlow()
+
     // Coroutine scope for reconnection
     private val reconnectScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -309,6 +313,26 @@ class WebSocketManager private constructor() {
                 }
             }
 
+            // LINE 客人透過 LIFF relocate 更新上車位置
+            on("order:pickup_updated") { args ->
+                try {
+                    Log.d(TAG, "📥 收到 order:pickup_updated 事件")
+                    val data = args.firstOrNull() as? JSONObject
+                    data?.let {
+                        val info = PickupUpdateInfo(
+                            orderId = it.getString("orderId"),
+                            pickupLat = it.getDouble("pickupLat"),
+                            pickupLng = it.getDouble("pickupLng"),
+                            pickupAddress = it.optString("pickupAddress", "")
+                        )
+                        Log.d(TAG, "📍 客人更新上車位置: ${info.orderId} → ${info.pickupAddress}")
+                        _pickupUpdated.value = info
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 解析 pickup_updated 失敗", e)
+                }
+            }
+
             // 語音對講：監聽乘客發來的語音訊息
             on("voice:message") { args ->
                 try {
@@ -447,6 +471,13 @@ class WebSocketManager private constructor() {
     }
 
     /**
+     * 清除 LINE 客人重發位置通知（處理完畢後調用）
+     */
+    fun clearPickupUpdated() {
+        _pickupUpdated.value = null
+    }
+
+    /**
      * 完全清理 Socket 連接
      */
     private fun cleanupSocket() {
@@ -467,6 +498,7 @@ class WebSocketManager private constructor() {
         _driverLocation.value = null
         _voiceChatMessage.value = null
         _orderUrge.value = null
+        _pickupUpdated.value = null
     }
 
     /**
@@ -914,4 +946,14 @@ data class OrderUrgeInfo(
     val message: String,
     val callerNumber: String? = null,
     val urgencyLevel: Int = 1  // 1=普通催單, 2=緊急催單
+)
+
+/**
+ * LINE 客人透過 LIFF relocate 重發上車位置
+ */
+data class PickupUpdateInfo(
+    val orderId: String,
+    val pickupLat: Double,
+    val pickupLng: Double,
+    val pickupAddress: String
 )

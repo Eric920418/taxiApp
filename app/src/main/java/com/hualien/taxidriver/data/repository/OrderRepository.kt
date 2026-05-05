@@ -136,6 +136,30 @@ class OrderRepository {
     }
 
     /**
+     * 司機請 LINE 客人重發上車位置
+     */
+    suspend fun requestRelocation(
+        orderId: String,
+        driverId: String,
+    ): Result<Unit> {
+        return try {
+            val response = apiService.requestRelocation(
+                orderId = orderId,
+                request = com.hualien.taxidriver.data.remote.dto.RequestRelocationRequest(
+                    driverId = driverId
+                )
+            )
+            if (response.isSuccessful) Result.success(Unit)
+            else {
+                val errBody = response.errorBody()?.string()
+                Result.failure(Exception(errBody ?: "請求失敗：${response.message()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("網路錯誤：${e.message}"))
+        }
+    }
+
+    /**
      * 愛心卡確認/取消
      */
     suspend fun updateOrderSubsidy(

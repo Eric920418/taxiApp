@@ -337,6 +337,54 @@ class HomeViewModel : ViewModel() {
                 }
             }
         }
+
+        // 監聽 LINE 客人透過 LIFF relocate 重發上車位置
+        viewModelScope.launch {
+            webSocketManager.pickupUpdated.collect { update ->
+                if (update != null) {
+                    android.util.Log.d("HomeViewModel", "📍 客人更新上車位置: ${update.orderId} → ${update.pickupAddress}")
+                    val current = _uiState.value.currentOrder
+                    if (current != null && current.orderId == update.orderId) {
+                        val newPickup = current.pickup.copy(
+                            latitude = update.pickupLat,
+                            longitude = update.pickupLng,
+                            address = update.pickupAddress.ifBlank { current.pickup.address },
+                        )
+                        _uiState.value = _uiState.value.copy(
+                            currentOrder = current.copy(pickup = newPickup),
+                            error = "客人已更新上車位置：${update.pickupAddress}",
+                        )
+                        voiceAssistant?.speak("客人已更新上車位置")
+                    }
+                    webSocketManager.clearPickupUpdated()
+                }
+            }
+        }
+    }
+
+    /**
+     * 司機請 LINE 客人重發上車位置（推 LINE 訊息給客人 → 客人開 LIFF 重選）
+     */
+    fun requestRelocation(orderId: String) {
+        viewModelScope.launch {
+            val driverId = currentDriverId ?: run {
+                _uiState.value = _uiState.value.copy(error = "尚未登入司機帳號")
+                return@launch
+            }
+            val result = repository.requestRelocation(orderId, driverId)
+            result.fold(
+                onSuccess = {
+                    _uiState.value = _uiState.value.copy(
+                        error = "已通知客人重發位置，請等待回覆"
+                    )
+                },
+                onFailure = { e ->
+                    _uiState.value = _uiState.value.copy(
+                        error = "通知失敗：${e.message}"
+                    )
+                }
+            )
+        }
     }
 
     /**

@@ -20,3 +20,11 @@ data class CancelNoShowRequest(
     @SerializedName("waitedMinutes")
     val waitedMinutes: Int? = null
 )
+
+/**
+ * 司機請客人重發上車位置（LINE 訂單專用）
+ */
+data class RequestRelocationRequest(
+    @SerializedName("driverId")
+    val driverId: String
+)

@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -320,6 +321,36 @@ fun SimplifiedDriverScreen(
                 onConfirmLoveCard = { orderId -> viewModel.confirmLoveCard(orderId, driverId) },
                 onCancelLoveCard = { orderId -> viewModel.cancelLoveCard(orderId, driverId) }
             )
+
+            // LINE 訂單專用：請客人重發位置按鈕（只接單後 / 到達時顯示）
+            val currentOrderForRelocate: com.hualien.taxidriver.domain.model.Order? = when (val s = orderState) {
+                is SmartOrderState.NavigatingToPickup -> s.order
+                is SmartOrderState.ArrivedAtPickup -> s.order
+                else -> null
+            }
+            if (currentOrderForRelocate != null && currentOrderForRelocate.source == "LINE") {
+                OutlinedButton(
+                    onClick = {
+                        viewModel.requestRelocation(currentOrderForRelocate.orderId)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationSearching,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "請客人重發上車位置",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
 
             // 中間：智能大按鈕
             SmartActionButton(

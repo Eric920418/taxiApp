@@ -149,6 +149,16 @@ interface ApiService {
     ): Response<Unit>
 
     /**
+     * 司機請 LINE 客人重發上車位置 — 推播 Flex card + LIFF deep link
+     * 限制：訂單 source 必須 LINE，且 status 在 ACCEPTED 或 ARRIVED
+     */
+    @POST("orders/{orderId}/request-relocation")
+    suspend fun requestRelocation(
+        @Path("orderId") orderId: String,
+        @Body request: RequestRelocationRequest
+    ): Response<Unit>
+
+    /**
      * 上傳車資結算
      * 返回 OrderDto 來處理 ISO 8601 日期格式
      */
