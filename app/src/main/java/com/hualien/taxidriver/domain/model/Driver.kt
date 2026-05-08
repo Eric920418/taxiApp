@@ -28,7 +28,14 @@ data class Driver(
     val lastHeartbeat: Long = System.currentTimeMillis(),
 
     @SerializedName("stats")
-    val stats: DriverStats? = null
+    val stats: DriverStats? = null,
+
+    /**
+     * 班次設定（admin 後台設）。為空陣列視為 24/7 在班（向後相容）。
+     * dispatcher 派單時會檢查此欄位 — 不在班次時間的司機不會收到 order:offer。
+     */
+    @SerializedName("shifts")
+    val shifts: List<ShiftSlot> = emptyList(),
 )
 
 /**

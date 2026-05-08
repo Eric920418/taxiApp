@@ -412,6 +412,24 @@ fun SimplifiedDriverScreen(
             VoiceListeningIndicator()
         }
 
+        // 1+1 疊單：「下一單已排隊」小卡片（行程中且收到 queued offer 時）
+        val queuedOrder = uiState.queuedOrder
+        if (queuedOrder != null) {
+            QueuedOrderCard(
+                queuedOrder = queuedOrder,
+                onAccept = {
+                    val driverName = uiState.currentOrder?.driverName ?: "司機"
+                    viewModel.acceptOrder(queuedOrder.orderId, driverId, driverName)
+                },
+                onReject = {
+                    viewModel.rejectOrder(queuedOrder.orderId, driverId, "司機不便接疊單")
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 100.dp, start = 16.dp, end = 16.dp)
+            )
+        }
+
         // 一鍵撥號浮動按鈕（接單後顯示）
         val currentOrderState = orderState  // 捕獲委託屬性的值以支援 smart cast
         val showCallButton = when (currentOrderState) {
@@ -1161,5 +1179,87 @@ fun formatDistance(meters: Double): String {
         "${meters.toInt()}公尺"
     } else {
         String.format("%.1f公里", meters / 1000)
+    }
+}
+
+/**
+ * 1+1 疊單「下一單已排隊」小卡片
+ * 顯示時機：司機 ON_TRIP/ARRIVED/ACCEPTED 進行中時收到新訂單推送
+ *
+ * 設計：
+ *  - 半透明卡片浮於 SmartActionButton 上方，不擋主畫面
+ *  - 顯示上車點 → 目的地 + 接受/拒絕按鈕
+ *  - 接受 → server 端 PATCH /accept 偵測 ON_TRIP 自動寫 queued_after_order_id
+ *  - 拒絕 → server 端標記司機拒絕，訂單回 OFFERED 派給其他人
+ *  - 前單 DONE 時 server 自動 emit order:status ACCEPTED 給此 queued 訂單
+ */
+@Composable
+fun QueuedOrderCard(
+    queuedOrder: com.hualien.taxidriver.domain.model.Order,
+    onAccept: () -> Unit,
+    onReject: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFFFF3E0).copy(alpha = 0.95f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Schedule,
+                    contentDescription = null,
+                    tint = Color(0xFFE65100),
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "📋 下一單已派發",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE65100),
+                )
+            }
+            Text(
+                "上車：${queuedOrder.pickup.address ?: "未知"}",
+                fontSize = 14.sp,
+                color = Color(0xFF333333),
+                maxLines = 1,
+            )
+            queuedOrder.destination?.address?.let {
+                Text(
+                    "目的地：$it",
+                    fontSize = 14.sp,
+                    color = Color(0xFF333333),
+                    maxLines = 1,
+                )
+            }
+            Text(
+                "接受後等前一單完成自動接手",
+                fontSize = 12.sp,
+                color = Color(0xFF888888),
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                Button(
+                    onClick = onAccept,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)),
+                    modifier = Modifier.weight(1f),
+                ) { Text("接受") }
+                OutlinedButton(
+                    onClick = onReject,
+                    modifier = Modifier.weight(1f),
+                ) { Text("拒絕") }
+            }
+        }
     }
 }

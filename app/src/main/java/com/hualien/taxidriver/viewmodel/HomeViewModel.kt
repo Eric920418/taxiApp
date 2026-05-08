@@ -78,7 +78,10 @@ data class HomeUiState(
     // 司機按「客人未到」後啟動的倒數：null = 未啟動
     val noShowWaitingStartedAt: Long? = null,     // 等候開始的 epoch millis
     val noShowRemainingSeconds: Int? = null,      // 剩餘秒數（給 UI 顯示）
-    val noShowCancelling: Boolean = false         // 正在送取消 API（避免重複送）
+    val noShowCancelling: Boolean = false,        // 正在送取消 API（避免重複送）
+
+    // === 班次設定（從後端拉，用於顯示「上班中／不在班次」banner） ===
+    val shifts: List<com.hualien.taxidriver.domain.model.ShiftSlot> = emptyList()
 )
 
 /**
@@ -206,15 +209,24 @@ class HomeViewModel : ViewModel() {
                         return@collect
                     }
 
-                    if (order.isQueuedOrder()) {
+                    // 1+1 疊單：若目前主訂單為 ON_TRIP / ARRIVED / ACCEPTED 進行中，
+                    // 新推送的訂單視為「下一單」（疊單），塞到 queuedOrder 不蓋主訂單
+                    val existingOrder = _uiState.value.currentOrder
+                    val isMidTrip = existingOrder != null &&
+                        existingOrder.status in setOf(
+                            OrderStatus.ON_TRIP,
+                            OrderStatus.ARRIVED,
+                            OrderStatus.ACCEPTED,
+                        )
+
+                    if (order.isQueuedOrder() || isMidTrip) {
                         _uiState.value = _uiState.value.copy(
                             queuedOrder = order,
                             error = null
                         )
-                        android.util.Log.d("HomeViewModel", "✅ 已更新下一單: ${order.orderId}")
+                        android.util.Log.d("HomeViewModel", "✅ 已更新下一單（疊單）: ${order.orderId}")
                     } else {
-                        // 如果已有進行中的主單，不覆蓋（防止誤操作）
-                        val existingOrder = _uiState.value.currentOrder
+                        // 如果已有進行中的主單但非疊單情境，不覆蓋（防止誤操作）
                         if (existingOrder != null &&
                             existingOrder.status != OrderStatus.WAITING &&
                             existingOrder.status != OrderStatus.OFFERED) {
@@ -1280,6 +1292,22 @@ class HomeViewModel : ViewModel() {
 
         voiceServicesInitialized = true
         android.util.Log.d("HomeViewModel", "✅ 語音服務初始化完成")
+
+        // 拉司機自己的班次設定，用於 HomeScreen 顯示「上班中／不在班次」banner
+        viewModelScope.launch {
+            try {
+                val res = com.hualien.taxidriver.data.remote.RetrofitClient.apiService.getDriverInfo(driverId)
+                if (res.isSuccessful) {
+                    val driver = res.body()
+                    if (driver != null) {
+                        _uiState.value = _uiState.value.copy(shifts = driver.shifts)
+                        android.util.Log.d("HomeViewModel", "✅ 班次載入成功：${driver.shifts.size} 段")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("HomeViewModel", "⚠️ 班次載入失敗（不影響其他功能）：${e.message}")
+            }
+        }
     }
 
     /**

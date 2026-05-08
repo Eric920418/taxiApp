@@ -280,6 +280,9 @@ fun HomeScreen(
                     }
                 }
 
+                // 班次狀態 banner（admin 設了排班才顯示；24/7 在班的司機看不到）
+                ShiftStatusBanner(shifts = uiState.shifts)
+
                 NewTopBar(title = driverName)
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -1653,6 +1656,80 @@ fun VoiceListeningIndicator() {
                 text = "聆聽中...",
                 color = Color.White,
                 fontSize = 16.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+/**
+ * 班次狀態 banner — 顯示「上班中／離下班 X 分」或「不在班次時間」。
+ * shifts 為空（24/7 在班）時整段不顯示，給沒設排班的司機保留乾淨畫面。
+ *
+ * mirror server-side 的 ShiftChecker 邏輯（util.ShiftChecker）。
+ */
+@Composable
+private fun ShiftStatusBanner(shifts: List<com.hualien.taxidriver.domain.model.ShiftSlot>) {
+    if (shifts.isEmpty()) return
+    val active = shifts.any { it.isActive }
+    if (!active) return
+
+    val isOnShift = com.hualien.taxidriver.util.ShiftChecker.isOnShift(shifts)
+    if (isOnShift) {
+        val minutesLeft = com.hualien.taxidriver.util.ShiftChecker.minutesUntilShiftEnd(shifts)
+        val timeLabel = minutesLeft?.let {
+            val h = it / 60
+            val m = it % 60
+            if (h > 0) "離下班還有 $h 小時 $m 分" else "離下班還有 $m 分"
+        } ?: ""
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF2E7D32))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "✓ 上班中  $timeLabel",
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    } else {
+        val minutesUntilStart = com.hualien.taxidriver.util.ShiftChecker.minutesUntilNextShiftStart(shifts)
+        val nextLabel = minutesUntilStart?.let {
+            val h = it / 60
+            val m = it % 60
+            if (h > 0) "（${h} 小時 ${m} 分後上班）" else "（${m} 分後上班）"
+        } ?: ""
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFFE65100))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "⚠️ 不在班次時間，無法接單  $nextLabel",
+                color = Color.White,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
         }
