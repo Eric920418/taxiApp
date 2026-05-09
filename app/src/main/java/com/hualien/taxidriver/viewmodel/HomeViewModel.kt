@@ -86,7 +86,10 @@ data class HomeUiState(
     // === 排班（Queue）===
     val queueZones: List<com.hualien.taxidriver.domain.model.QueueZone> = emptyList(),
     val myQueueStatus: com.hualien.taxidriver.domain.model.QueueMyStatus? = null,
-    val queueLoading: Boolean = false
+    val queueLoading: Boolean = false,
+
+    // === GoGoCha 抽成接受度（司機願意被平台抽最高 N%）===
+    val maxAcceptableCommissionPct: Int = 100
 )
 
 /**
@@ -1365,20 +1368,48 @@ class HomeViewModel : ViewModel() {
         voiceServicesInitialized = true
         android.util.Log.d("HomeViewModel", "✅ 語音服務初始化完成")
 
-        // 拉司機自己的班次設定，用於 HomeScreen 顯示「上班中／不在班次」banner
+        // 拉司機自己的班次設定 + 抽成接受度
         viewModelScope.launch {
             try {
                 val res = com.hualien.taxidriver.data.remote.RetrofitClient.apiService.getDriverInfo(driverId)
                 if (res.isSuccessful) {
                     val driver = res.body()
                     if (driver != null) {
-                        _uiState.value = _uiState.value.copy(shifts = driver.shifts)
-                        android.util.Log.d("HomeViewModel", "✅ 班次載入成功：${driver.shifts.size} 段")
+                        _uiState.value = _uiState.value.copy(
+                            shifts = driver.shifts,
+                            maxAcceptableCommissionPct = driver.maxAcceptableCommissionPct,
+                        )
+                        android.util.Log.d("HomeViewModel", "✅ 班次：${driver.shifts.size}段，抽成接受度：${driver.maxAcceptableCommissionPct}%")
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.w("HomeViewModel", "⚠️ 班次載入失敗（不影響其他功能）：${e.message}")
+                android.util.Log.w("HomeViewModel", "⚠️ 司機資訊載入失敗（不影響其他功能）：${e.message}")
             }
+        }
+    }
+
+    /**
+     * 更新司機的抽成接受度（GoGoCha Queue 媒合用）
+     */
+    fun updateCommissionPreference(newPct: Int) {
+        viewModelScope.launch {
+            val driverId = currentDriverId ?: return@launch
+            // 樂觀更新 UI
+            _uiState.value = _uiState.value.copy(maxAcceptableCommissionPct = newPct)
+            val result = queueRepository.updateCommission(driverId, newPct)
+            result.fold(
+                onSuccess = { confirmedPct ->
+                    _uiState.value = _uiState.value.copy(
+                        maxAcceptableCommissionPct = confirmedPct,
+                        error = "已更新抽成偏好：${confirmedPct}%",
+                    )
+                },
+                onFailure = { e ->
+                    // 失敗 rollback
+                    _uiState.value = _uiState.value.copy(error = "更新失敗：${e.message}")
+                    refreshQueue()  // 順便重抓 server 真實值
+                }
+            )
         }
     }
 

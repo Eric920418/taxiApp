@@ -286,6 +286,14 @@ fun HomeScreen(
                 // 班次狀態 banner（admin 設了排班才顯示；24/7 在班的司機看不到）
                 ShiftStatusBanner(shifts = uiState.shifts)
 
+                // GoGoCha 抽成偏好 chip row（在線時顯示）
+                if (uiState.driverStatus == DriverAvailability.AVAILABLE) {
+                    CommissionPreferenceRow(
+                        currentPct = uiState.maxAcceptableCommissionPct,
+                        onChange = { viewModel.updateCommissionPreference(it) },
+                    )
+                }
+
                 // 排班區浮卡（在線時顯示）
                 if (uiState.driverStatus == DriverAvailability.AVAILABLE) {
                     val fusedLocationClient = remember {
@@ -1765,6 +1773,57 @@ private fun ShiftStatusBanner(shifts: List<com.hualien.taxidriver.domain.model.S
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
+        }
+    }
+}
+
+/**
+ * GoGoCha 抽成偏好 chip row
+ *
+ * 司機選擇願意被平台抽最多 N%。Queue 派單時：
+ *   - 訂單 commission_pct ≤ N → 司機符合資格
+ *   - 排序時 N 大的優先（願意給平台多賺的優先派單）
+ *
+ * 5 段預設：10 / 30 / 50 / 80 / 100（接所有）
+ */
+@Composable
+private fun CommissionPreferenceRow(
+    currentPct: Int,
+    onChange: (Int) -> Unit,
+) {
+    val tiers = listOf(10, 30, 50, 80, 100)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF3E5F5)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(
+                "💰 我接受抽成 ≤  $currentPct%（高的優先派單）",
+                fontSize = 13.sp,
+                color = Color(0xFF6A1B9A),
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                tiers.forEach { pct ->
+                    val selected = pct == currentPct
+                    FilterChip(
+                        selected = selected,
+                        onClick = { if (!selected) onChange(pct) },
+                        label = { Text("≤$pct%", fontSize = 13.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF9C27B0),
+                            selectedLabelColor = Color.White,
+                        ),
+                    )
+                }
+            }
         }
     }
 }

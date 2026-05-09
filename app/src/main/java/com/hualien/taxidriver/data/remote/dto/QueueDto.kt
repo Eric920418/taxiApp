@@ -52,3 +52,19 @@ data class QueueLeaveRequest(
     @SerializedName("reason")
     val reason: String? = "MANUAL",
 )
+
+/**
+ * PATCH /api/drivers/:id/commission request
+ */
+data class UpdateCommissionRequest(
+    @SerializedName("maxAcceptableCommissionPct")
+    val maxAcceptableCommissionPct: Int,
+)
+
+data class UpdateCommissionResponse(
+    @SerializedName("success")
+    val success: Boolean = false,
+
+    @SerializedName("max_acceptable_commission_pct")
+    val maxAcceptableCommissionPct: Int = 100,
+)

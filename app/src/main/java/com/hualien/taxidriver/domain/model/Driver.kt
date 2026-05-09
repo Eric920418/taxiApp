@@ -36,6 +36,14 @@ data class Driver(
      */
     @SerializedName("shifts")
     val shifts: List<ShiftSlot> = emptyList(),
+
+    /**
+     * GoGoCha 抽成接受度：司機願意被平台抽最高 N%。
+     * 影響 Queue 排班媒合：訂單 commission_pct ≤ 此值才會被派；高的優先派。
+     * 預設 100% = 接所有抽成。
+     */
+    @SerializedName("maxAcceptableCommissionPct")
+    val maxAcceptableCommissionPct: Int = 100,
 )
 
 /**

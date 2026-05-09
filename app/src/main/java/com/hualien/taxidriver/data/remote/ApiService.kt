@@ -173,6 +173,15 @@ interface ApiService {
     suspend fun leaveQueue(@Body request: QueueLeaveRequest): Response<Unit>
 
     /**
+     * 更新司機抽成接受度（GoGoCha Queue 媒合）
+     */
+    @PATCH("drivers/{driverId}/commission")
+    suspend fun updateDriverCommission(
+        @Path("driverId") driverId: String,
+        @Body request: UpdateCommissionRequest
+    ): Response<UpdateCommissionResponse>
+
+    /**
      * 上傳車資結算
      * 返回 OrderDto 來處理 ISO 8601 日期格式
      */
