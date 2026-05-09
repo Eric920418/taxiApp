@@ -15,6 +15,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -130,6 +132,7 @@ fun HomeScreen(
     val phoneReviewState by phoneReviewVm.uiState.collectAsState()
     LaunchedEffect(driverId) {
         phoneReviewVm.loadReviewCount(driverId)
+        viewModel.refreshQueue()  // 載入排班區 + 自己的排班狀態
     }
 
     // 語音對講狀態
@@ -282,6 +285,36 @@ fun HomeScreen(
 
                 // 班次狀態 banner（admin 設了排班才顯示；24/7 在班的司機看不到）
                 ShiftStatusBanner(shifts = uiState.shifts)
+
+                // 排班區浮卡（在線時顯示）
+                if (uiState.driverStatus == DriverAvailability.AVAILABLE) {
+                    val fusedLocationClient = remember {
+                        com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+                    }
+                    QueueZonesBar(
+                        zones = uiState.queueZones,
+                        myStatus = uiState.myQueueStatus,
+                        onJoin = { zoneId ->
+                            try {
+                                @Suppress("MissingPermission")
+                                val task = fusedLocationClient.lastLocation
+                                task.addOnSuccessListener { loc ->
+                                    if (loc != null) {
+                                        viewModel.joinQueueZone(zoneId, loc.latitude, loc.longitude)
+                                    } else {
+                                        Toast.makeText(context, "尚未取得 GPS 位置，請稍候再試", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                task.addOnFailureListener {
+                                    Toast.makeText(context, "GPS 取得失敗：${it.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (e: SecurityException) {
+                                Toast.makeText(context, "請先授予位置權限", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onLeave = { viewModel.leaveQueueZone() },
+                    )
+                }
 
                 NewTopBar(title = driverName)
 
@@ -1732,6 +1765,83 @@ private fun ShiftStatusBanner(shifts: List<com.hualien.taxidriver.domain.model.S
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
+        }
+    }
+}
+
+/**
+ * 排班區浮卡：橫向 chip 列，每個 zone 顯示「名稱 ｜ 排班數」
+ * - 司機未在排班 → 點擊任一 zone = 加入該 zone（要 GPS 在範圍內）
+ * - 司機已在排班 → 顯示「✓ 排班中：X｜已 Y 分鐘」+ 退出按鈕
+ * - 沒任何 zone 設定 → 整段隱藏
+ */
+@Composable
+private fun QueueZonesBar(
+    zones: List<com.hualien.taxidriver.domain.model.QueueZone>,
+    myStatus: com.hualien.taxidriver.domain.model.QueueMyStatus?,
+    onJoin: (zoneId: String) -> Unit,
+    onLeave: () -> Unit,
+) {
+    if (zones.isEmpty()) return
+
+    val isInQueue = myStatus?.inQueue == true
+    val activeZoneId = myStatus?.zoneId
+    val minutesInQueue = myStatus?.minutesInQueue
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isInQueue) Color(0xFFFFF3E0) else Color(0xFFE3F2FD),
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            if (isInQueue) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        "✓ 排班中：${myStatus?.zoneName ?: ""} ｜ 已 ${minutesInQueue ?: 0} 分鐘",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFE65100),
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(
+                        onClick = onLeave,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Text("退出", fontSize = 13.sp)
+                    }
+                }
+            } else {
+                Text(
+                    "📍 排班區（點擊加入）",
+                    fontSize = 13.sp,
+                    color = Color(0xFF1976D2),
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(zones.size) { idx ->
+                        val z = zones[idx]
+                        AssistChip(
+                            onClick = { onJoin(z.zoneId) },
+                            label = {
+                                Text("${z.name} ｜ ${z.activeDrivers}", fontSize = 14.sp)
+                            },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = Color.White,
+                            ),
+                        )
+                    }
+                }
+            }
         }
     }
 }

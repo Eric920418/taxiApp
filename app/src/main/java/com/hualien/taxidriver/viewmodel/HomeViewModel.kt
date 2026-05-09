@@ -81,7 +81,12 @@ data class HomeUiState(
     val noShowCancelling: Boolean = false,        // 正在送取消 API（避免重複送）
 
     // === 班次設定（從後端拉，用於顯示「上班中／不在班次」banner） ===
-    val shifts: List<com.hualien.taxidriver.domain.model.ShiftSlot> = emptyList()
+    val shifts: List<com.hualien.taxidriver.domain.model.ShiftSlot> = emptyList(),
+
+    // === 排班（Queue）===
+    val queueZones: List<com.hualien.taxidriver.domain.model.QueueZone> = emptyList(),
+    val myQueueStatus: com.hualien.taxidriver.domain.model.QueueMyStatus? = null,
+    val queueLoading: Boolean = false
 )
 
 /**
@@ -108,6 +113,7 @@ object NoShowWaitingPolicy {
 class HomeViewModel : ViewModel() {
 
     private val repository = OrderRepository()
+    private val queueRepository = com.hualien.taxidriver.data.repository.QueueRepository()
     private val webSocketManager = WebSocketManager.getInstance()
 
     // 客人未到等候計時 — 獨立 job，方便 cancel
@@ -377,6 +383,72 @@ class HomeViewModel : ViewModel() {
     /**
      * 司機請 LINE 客人重發上車位置（推 LINE 訊息給客人 → 客人開 LIFF 重選）
      */
+    /**
+     * 載入排班區列表 + 司機自己的排班狀態
+     * 呼叫時機：HomeScreen LaunchedEffect、加入/退出排班後
+     */
+    fun refreshQueue() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(queueLoading = true)
+            val driverId = currentDriverId
+            try {
+                val zonesResult = queueRepository.getZones()
+                val zones = zonesResult.getOrDefault(emptyList())
+
+                val myStatus = if (driverId != null) {
+                    queueRepository.getMyStatus(driverId).getOrNull()
+                } else null
+
+                _uiState.value = _uiState.value.copy(
+                    queueZones = zones,
+                    myQueueStatus = myStatus,
+                    queueLoading = false,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(queueLoading = false)
+                android.util.Log.w("HomeViewModel", "排班載入失敗：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 加入排班
+     */
+    fun joinQueueZone(zoneId: String, currentLat: Double, currentLng: Double) {
+        viewModelScope.launch {
+            val driverId = currentDriverId ?: return@launch
+            val result = queueRepository.joinQueue(driverId, zoneId, currentLat, currentLng)
+            result.fold(
+                onSuccess = {
+                    _uiState.value = _uiState.value.copy(error = "已加入排班")
+                    refreshQueue()
+                },
+                onFailure = { e ->
+                    _uiState.value = _uiState.value.copy(error = "加入失敗：${e.message}")
+                }
+            )
+        }
+    }
+
+    /**
+     * 退出排班
+     */
+    fun leaveQueueZone() {
+        viewModelScope.launch {
+            val driverId = currentDriverId ?: return@launch
+            val result = queueRepository.leaveQueue(driverId)
+            result.fold(
+                onSuccess = {
+                    _uiState.value = _uiState.value.copy(error = "已退出排班")
+                    refreshQueue()
+                },
+                onFailure = { e ->
+                    _uiState.value = _uiState.value.copy(error = "退出失敗：${e.message}")
+                }
+            )
+        }
+    }
+
     fun requestRelocation(orderId: String) {
         viewModelScope.launch {
             val driverId = currentDriverId ?: run {

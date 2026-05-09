@@ -158,6 +158,20 @@ interface ApiService {
         @Body request: RequestRelocationRequest
     ): Response<Unit>
 
+    // ==================== 排班 (Queue) ====================
+
+    @GET("queue/zones")
+    suspend fun getQueueZones(): Response<QueueZonesResponse>
+
+    @GET("queue/my-status")
+    suspend fun getQueueMyStatus(@Query("driver_id") driverId: String): Response<com.hualien.taxidriver.domain.model.QueueMyStatus>
+
+    @POST("queue/join")
+    suspend fun joinQueue(@Body request: QueueJoinRequest): Response<QueueJoinResponse>
+
+    @POST("queue/leave")
+    suspend fun leaveQueue(@Body request: QueueLeaveRequest): Response<Unit>
+
     /**
      * 上傳車資結算
      * 返回 OrderDto 來處理 ISO 8601 日期格式
