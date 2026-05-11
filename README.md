@@ -1,9 +1,44 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.2.8（beta28）| 更新日期：2026-05-11
+> 版本：v1.2.9（beta29）| 更新日期：2026-05-11
 
-## 📝 最新更新（2026-05-11）- 媒合機制重構：commission % → discount 元 + Preferred Fleet + LIFF Fallback
+## 📝 最新更新（2026-05-11 晚）- 司機 App 首頁整合：CompactStatusBar
+
+### 問題
+v1.2.8 把 `CommissionPreferenceRow`（% 抽成 chip）改成 `DiscountPreferenceRow`（元折扣 chip），但 user 反映「太醜太占空間又難用」。首頁有三層浮卡垂直堆疊（班次 banner + 折扣 chip row + 排班 zone bar），各自帶 12-16dp padding，佔掉螢幕高度約 25%。
+
+### 解法：CompactStatusBar 一行兩塊 + ModalBottomSheet
+新檔 `ui/components/CompactStatusBar.kt`：
+
+```
+┌──────────────┬──────────────┐
+│ 📍 排班       │ 💰 ≤ 30 元   │   ← 64dp 高
+│  點擊選擇 ▼   │  讓利優先 ▼  │
+└──────────────┴──────────────┘
+   點開 sheet      點開 sheet
+```
+
+兩個 ModalBottomSheet 內容：
+- **QueueZoneSheet**：列出所有 zone（zone 名 + 目前排班人數），未排班可點加入、已排班顯示「✓」+ 退出按鈕
+- **DiscountPreferenceSheet**：5 段 chip (0/10/20/30/40 元) + 即時預覽當前選擇 + 解釋文字
+
+### 主要變更
+- **新增** `ui/components/CompactStatusBar.kt`（~280 行，包含 CompactBlock + 兩個 Sheet content Composable）
+- **刪除** HomeScreen.kt 內舊 `DiscountPreferenceRow`（45 行）+ `QueueZonesBar`（68 行）
+- **整合** call site：HomeScreen 287-321 兩個獨立浮卡 → 單一 `CompactStatusBar` 呼叫
+- **保留** `ShiftStatusBanner`（屬細條 banner 不是浮卡，視覺上不衝突）
+- versionCode 28 → 29；versionName 1.2.8 → 1.2.9
+
+### 設計取捨
+- **為何 64dp 高度而非更小**：要塞下圖示 + 標題 + 副標 + 展開箭頭，再小會擠
+- **為何兩塊不是三塊（不含班次）**：班次 banner 是綠/橘細條（高 ~32dp），語意上是「警示」（不在班次時無法接單），跟「設定按鈕」性質不同，硬塞同列會混淆
+- **為何 ModalBottomSheet 而非 Dialog / Dropdown**：手機底部單手可達範圍，操作姿勢自然；BottomSheet 拖曳關閉符合 Material 慣例
+- **為何加入按鈕同時放卡片點擊 + 「加入」OutlinedButton**：增加觸發目標面積，老司機操作友善
+
+---
+
+## 📝 中午更新（2026-05-11）- 媒合機制重構：commission % → discount 元 + Preferred Fleet + LIFF Fallback
 
 ### 核心變更：% 抽成 → 元折扣
 

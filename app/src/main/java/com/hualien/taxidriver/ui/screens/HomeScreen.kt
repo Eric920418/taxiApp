@@ -41,6 +41,7 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
+import com.hualien.taxidriver.ui.components.CompactStatusBar
 import com.hualien.taxidriver.ui.components.FareDialog
 import com.hualien.taxidriver.ui.components.MiniVoiceChatButton
 import com.hualien.taxidriver.ui.components.RatingDialog
@@ -286,23 +287,16 @@ fun HomeScreen(
                 // 班次狀態 banner（admin 設了排班才顯示；24/7 在班的司機看不到）
                 ShiftStatusBanner(shifts = uiState.shifts)
 
-                // GoGoCha 折扣偏好 chip row（在線時顯示）
-                if (uiState.driverStatus == DriverAvailability.AVAILABLE) {
-                    DiscountPreferenceRow(
-                        currentAmount = uiState.maxAcceptableDiscountAmount,
-                        onChange = { viewModel.updateDiscountPreference(it) },
-                    )
-                }
-
-                // 排班區浮卡（在線時顯示）
+                // GoGoCha 緊湊狀態列（排班 + 折扣設定，取代原三層浮卡）
                 if (uiState.driverStatus == DriverAvailability.AVAILABLE) {
                     val fusedLocationClient = remember {
                         com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
                     }
-                    QueueZonesBar(
-                        zones = uiState.queueZones,
-                        myStatus = uiState.myQueueStatus,
-                        onJoin = { zoneId ->
+                    CompactStatusBar(
+                        queueZones = uiState.queueZones,
+                        myQueueStatus = uiState.myQueueStatus,
+                        currentDiscountAmount = uiState.maxAcceptableDiscountAmount,
+                        onJoinQueue = { zoneId ->
                             try {
                                 @Suppress("MissingPermission")
                                 val task = fusedLocationClient.lastLocation
@@ -320,7 +314,8 @@ fun HomeScreen(
                                 Toast.makeText(context, "請先授予位置權限", Toast.LENGTH_SHORT).show()
                             }
                         },
-                        onLeave = { viewModel.leaveQueueZone() },
+                        onLeaveQueue = { viewModel.leaveQueueZone() },
+                        onChangeDiscount = { viewModel.updateDiscountPreference(it) },
                     )
                 }
 
@@ -1773,140 +1768,6 @@ private fun ShiftStatusBanner(shifts: List<com.hualien.taxidriver.domain.model.S
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
-        }
-    }
-}
-
-/**
- * GoGoCha 折扣偏好 chip row
- *
- * 司機選擇願意對客人讓利最多 NT$ N 元。Queue 派單時：
- *   - 訂單 discount_amount ≤ N → 司機符合資格
- *   - 排序時 N 大的（願意讓利多的）優先派單
- *
- * 5 段制：0 / 10 / 20 / 30 / 40 元（0 = 全價單也接）
- */
-@Composable
-private fun DiscountPreferenceRow(
-    currentAmount: Int,
-    onChange: (Int) -> Unit,
-) {
-    val tiers = listOf(0, 10, 20, 30, 40)
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(
-                if (currentAmount == 0) "💰 我願意給客人折扣 ≤ NT$ 0 元（全價單也接）"
-                else "💰 我願意給客人折扣 ≤ NT$ $currentAmount 元（讓利多的優先派單）",
-                fontSize = 13.sp,
-                color = Color(0xFFE65100),
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(bottom = 6.dp),
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                tiers.forEach { amt ->
-                    val selected = amt == currentAmount
-                    FilterChip(
-                        selected = selected,
-                        onClick = { if (!selected) onChange(amt) },
-                        label = {
-                            Text(
-                                if (amt == 0) "不打折" else "≤${amt}元",
-                                fontSize = 13.sp,
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFFF6F00),
-                            selectedLabelColor = Color.White,
-                        ),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 排班區浮卡：橫向 chip 列，每個 zone 顯示「名稱 ｜ 排班數」
- * - 司機未在排班 → 點擊任一 zone = 加入該 zone（要 GPS 在範圍內）
- * - 司機已在排班 → 顯示「✓ 排班中：X｜已 Y 分鐘」+ 退出按鈕
- * - 沒任何 zone 設定 → 整段隱藏
- */
-@Composable
-private fun QueueZonesBar(
-    zones: List<com.hualien.taxidriver.domain.model.QueueZone>,
-    myStatus: com.hualien.taxidriver.domain.model.QueueMyStatus?,
-    onJoin: (zoneId: String) -> Unit,
-    onLeave: () -> Unit,
-) {
-    if (zones.isEmpty()) return
-
-    val isInQueue = myStatus?.inQueue == true
-    val activeZoneId = myStatus?.zoneId
-    val minutesInQueue = myStatus?.minutesInQueue
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isInQueue) Color(0xFFFFF3E0) else Color(0xFFE3F2FD),
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            if (isInQueue) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        "✓ 排班中：${myStatus?.zoneName ?: ""} ｜ 已 ${minutesInQueue ?: 0} 分鐘",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFE65100),
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedButton(
-                        onClick = onLeave,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    ) {
-                        Text("退出", fontSize = 13.sp)
-                    }
-                }
-            } else {
-                Text(
-                    "📍 排班區（點擊加入）",
-                    fontSize = 13.sp,
-                    color = Color(0xFF1976D2),
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(bottom = 6.dp),
-                )
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(zones.size) { idx ->
-                        val z = zones[idx]
-                        AssistChip(
-                            onClick = { onJoin(z.zoneId) },
-                            label = {
-                                Text("${z.name} ｜ ${z.activeDrivers}", fontSize = 14.sp)
-                            },
-                            colors = AssistChipDefaults.assistChipColors(
-                                containerColor = Color.White,
-                            ),
-                        )
-                    }
-                }
-            }
         }
     }
 }
