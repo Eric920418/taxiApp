@@ -89,7 +89,7 @@ data class HomeUiState(
     val queueLoading: Boolean = false,
 
     // === GoGoCha 抽成接受度（司機願意被平台抽最高 N%）===
-    val maxAcceptableCommissionPct: Int = 100
+    val maxAcceptableDiscountAmount: Int = 0
 )
 
 /**
@@ -1377,9 +1377,9 @@ class HomeViewModel : ViewModel() {
                     if (driver != null) {
                         _uiState.value = _uiState.value.copy(
                             shifts = driver.shifts,
-                            maxAcceptableCommissionPct = driver.maxAcceptableCommissionPct,
+                            maxAcceptableDiscountAmount = driver.maxAcceptableDiscountAmount,
                         )
-                        android.util.Log.d("HomeViewModel", "✅ 班次：${driver.shifts.size}段，抽成接受度：${driver.maxAcceptableCommissionPct}%")
+                        android.util.Log.d("HomeViewModel", "✅ 班次：${driver.shifts.size}段，折扣接受度：${driver.maxAcceptableDiscountAmount} 元")
                     }
                 }
             } catch (e: Exception) {
@@ -1391,16 +1391,16 @@ class HomeViewModel : ViewModel() {
     /**
      * 更新司機的抽成接受度（GoGoCha Queue 媒合用）
      */
-    fun updateCommissionPreference(newPct: Int) {
+    fun updateDiscountPreference(newPct: Int) {
         viewModelScope.launch {
             val driverId = currentDriverId ?: return@launch
             // 樂觀更新 UI
-            _uiState.value = _uiState.value.copy(maxAcceptableCommissionPct = newPct)
-            val result = queueRepository.updateCommission(driverId, newPct)
+            _uiState.value = _uiState.value.copy(maxAcceptableDiscountAmount = newPct)
+            val result = queueRepository.updateDiscount(driverId, newPct)
             result.fold(
                 onSuccess = { confirmedPct ->
                     _uiState.value = _uiState.value.copy(
-                        maxAcceptableCommissionPct = confirmedPct,
+                        maxAcceptableDiscountAmount = confirmedPct,
                         error = "已更新抽成偏好：${confirmedPct}%",
                     )
                 },

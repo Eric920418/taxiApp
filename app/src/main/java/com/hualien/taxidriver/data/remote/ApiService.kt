@@ -175,11 +175,11 @@ interface ApiService {
     /**
      * 更新司機抽成接受度（GoGoCha Queue 媒合）
      */
-    @PATCH("drivers/{driverId}/commission")
+    @PATCH("drivers/{driverId}/discount")
     suspend fun updateDriverCommission(
         @Path("driverId") driverId: String,
-        @Body request: UpdateCommissionRequest
-    ): Response<UpdateCommissionResponse>
+        @Body request: UpdateDiscountRequest
+    ): Response<UpdateDiscountResponse>
 
     /**
      * 上傳車資結算

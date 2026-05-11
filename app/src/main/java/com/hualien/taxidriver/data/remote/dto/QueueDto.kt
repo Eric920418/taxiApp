@@ -27,8 +27,8 @@ data class QueueJoinRequest(
     @SerializedName("current_lng")
     val currentLng: Double,
 
-    @SerializedName("max_acceptable_commission_pct")
-    val maxAcceptableCommissionPct: Int? = 100,
+    @SerializedName("max_acceptable_discount_amount")
+    val maxAcceptableDiscountAmount: Int? = 0,
 )
 
 data class QueueJoinResponse(
@@ -54,17 +54,17 @@ data class QueueLeaveRequest(
 )
 
 /**
- * PATCH /api/drivers/:id/commission request
+ * PATCH /api/drivers/:id/discount request
  */
-data class UpdateCommissionRequest(
-    @SerializedName("maxAcceptableCommissionPct")
-    val maxAcceptableCommissionPct: Int,
+data class UpdateDiscountRequest(
+    @SerializedName("maxAcceptableDiscountAmount")
+    val maxAcceptableDiscountAmount: Int,
 )
 
-data class UpdateCommissionResponse(
+data class UpdateDiscountResponse(
     @SerializedName("success")
     val success: Boolean = false,
 
-    @SerializedName("max_acceptable_commission_pct")
-    val maxAcceptableCommissionPct: Int = 100,
+    @SerializedName("max_acceptable_discount_amount")
+    val maxAcceptableDiscountAmount: Int = 0,
 )

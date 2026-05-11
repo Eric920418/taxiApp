@@ -37,11 +37,11 @@ class QueueRepository {
         zoneId: String,
         currentLat: Double,
         currentLng: Double,
-        maxAcceptableCommissionPct: Int = 100,
+        maxAcceptableDiscountAmount: Int = 0,
     ): Result<Unit> {
         return try {
             val res = api.joinQueue(
-                QueueJoinRequest(driverId, zoneId, currentLat, currentLng, maxAcceptableCommissionPct)
+                QueueJoinRequest(driverId, zoneId, currentLat, currentLng, maxAcceptableDiscountAmount)
             )
             if (res.isSuccessful) Result.success(Unit)
             else {
@@ -63,13 +63,13 @@ class QueueRepository {
         }
     }
 
-    suspend fun updateCommission(driverId: String, maxAcceptablePct: Int): Result<Int> {
+    suspend fun updateDiscount(driverId: String, maxAcceptableAmt: Int): Result<Int> {
         return try {
             val res = api.updateDriverCommission(
                 driverId,
-                com.hualien.taxidriver.data.remote.dto.UpdateCommissionRequest(maxAcceptablePct)
+                com.hualien.taxidriver.data.remote.dto.UpdateDiscountRequest(maxAcceptableAmt)
             )
-            if (res.isSuccessful) Result.success(res.body()?.maxAcceptableCommissionPct ?: maxAcceptablePct)
+            if (res.isSuccessful) Result.success(res.body()?.maxAcceptableDiscountAmount ?: maxAcceptableAmt)
             else {
                 val errBody = res.errorBody()?.string()
                 Result.failure(Exception(errBody ?: "更新失敗：${res.message()}"))

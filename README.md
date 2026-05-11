@@ -1,9 +1,90 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.2.1（beta21）| 更新日期：2026-05-02
+> 版本：v1.2.8（beta28）| 更新日期：2026-05-11
 
-## 📝 最新更新（2026-05-02）- 啟動封面 + 登入歡迎頁
+## 📝 最新更新（2026-05-11）- 媒合機制重構：commission % → discount 元 + Preferred Fleet + LIFF Fallback
+
+### 核心變更：% 抽成 → 元折扣
+
+5/10 部署的 commission_pct (%) 機制設計錯了。今日全面翻轉：
+- **語意翻轉**：「司機被平台抽 N%」→「司機願意對客人讓利 NT$ N 元」
+- **匹配方向反過來**：`driver.max_acceptable_discount_amount ≥ order.discount_amount`（數字大的優先）
+- **4 段制（含 0）**：0 / 10 / 20 / 30 / 40 元
+- **0 元語意**：「全價單也接」（最低門檻 = 最大彈性），不是拒接打折
+
+### Migration 022 (`022-discount-rename.sql`)
+- `orders.commission_pct` → `orders.discount_amount` DEFAULT 0
+- `drivers.max_acceptable_commission_pct` → `max_acceptable_discount_amount` DEFAULT 0
+- `partners.default_order_commission_pct` → `default_order_discount_amount` DEFAULT 0
+- `queue_entries` / `billing_snapshots` 對應欄位同步 rename
+- 新增 `orders.preferred_fleet_partner_id`（LINE 官方/電話來源綁特定車隊）
+- 新增 `orders.fallback_prompted_at`（OrderFallbackService idempotency）
+- 新增 `partners.notes`（合作對象備註欄）
+
+### 派單新增 Layer 0.5：Preferred Fleet 過濾
+- 訂單若有 `preferred_fleet_partner_id` → 候選司機限定該車隊 PRIMARY_FLEET 司機
+- 30 秒 timeout 後客人可選擇解除（外調合作車）
+- SQL 用 `$2` parameterized 防 injection
+
+### 30 秒 LIFF Fallback (`OrderFallbackService.ts`)
+- `setInterval` 每 10 秒掃 OFFERED 訂單
+- 30 秒未接 + preferred_fleet != NULL → 推 LINE flex carousel（3 選 1）
+  - 💸 加碼折扣到下一階（+10 元）→ 重派
+  - 🚖 改派排班司機（清 preferred_fleet）→ 重派
+  - ❌ 取消叫車
+- postback handler 在 `LineMessageProcessor`：`FALLBACK_RAISE / ALLOW_DISPATCH / CANCEL`
+
+### LIFF Channel → Partner Mapping
+新 env：
+```env
+LINE_CHANNEL_TO_PARTNER_MAP={"channel_id_dafeng":"partner_dafeng"}
+```
+LIFF 建單時讀 access_token 對應的 channel_id（`/oauth2/v2.1/verify`），查 map 自動填 `preferred_fleet_partner_id`。
+
+### Admin Panel 強化
+- `Partners.tsx` Form 加 `default_order_discount_amount` (InputNumber 0-40 step 10) + `notes` (TextArea 500 字)
+- `Billing.tsx` 三 tab 報表「抽成%」改顯示「折扣元」
+- 既有 CSV 匯出沿用
+
+### LIFF UI（`public/liff/booking.html`）
+- 4 段加價 → 5 段折扣：不打折 / 10 元 / 20 元 / 30 元 / 40 元
+- body field `commissionPct` → `discountAmount`
+
+### 司機 App UI
+- HomeScreen `CommissionPreferenceRow` → `DiscountPreferenceRow`
+- 5 段 chip：不打折 / ≤10元 / ≤20元 / ≤30元 / ≤40元
+- 文案：「我願意給客人折扣 ≤ NT$ N 元（讓利多的優先派單）」
+- Driver model / DTO / API path (`/commission` → `/discount`) 全 rename
+- versionCode 27 → 28，versionName 1.2.7 → 1.2.8
+
+### 影響檔案（21 個 + 2 個 new）
+**Backend**: orders.ts (砍 Cap 1), line-liff.ts (加 channelId mapping), drivers.ts (endpoint rename), queue.ts, auth.ts, admin-billing.ts, admin-partners.ts, BillingService.ts (元為單位計算), QueueOrderingService.ts, SmartDispatcherV2.ts (Layer 0.5), LineFlexTemplates.ts (fallbackPromptCarousel), LineMessageProcessor.ts (3 postback handlers), index.ts (start OrderFallbackService), migrate.ts
+**Admin**: Partners.tsx, Billing.tsx, Drivers.tsx, api.ts
+**LIFF**: booking.html
+**Android**: HomeScreen.kt, HomeViewModel.kt, Driver.kt, QueueDto.kt, QueueZone.kt, ApiService.kt, QueueRepository.kt, build.gradle.kts, release-notes
+**New**: 022-discount-rename.sql, OrderFallbackService.ts
+
+### 部署紀錄
+- VPS commit `3093de5` push origin/main
+- Migration 022 跑成功（fresh schema 100% 翻轉，無殘留 commission_pct 欄位）
+- pm2 restart taxiserver online；`[OrderFallback] 已啟動 (每 10 秒掃一次)`
+- Android v1.2.8 beta28 已推 Play Console alpha 軌道
+
+### 不做的（後續）
+- 司機 App UI 三浮卡合併（CompactStatusBar + ModalBottomSheet）— 此次先做 chip 翻轉 + 文案，UI 整合留下次
+- 歷史 billing_snapshot 不重算（commission_pct=5 寫過的少量訂單）
+- LINE 官方多帳號 admin UI（先 env map）
+
+---
+
+## 📝 歷史更新（2026-05-10）- GoGoCha 6 Cap 補強（已 deprecated by 5/11 重構）
+
+5/10 部署的 commission % 機制因今日 user 重新定義需求被全面翻轉（見上）。Migration 020 加的 `default_order_commission_pct` 已在 022 rename 成 `default_order_discount_amount` 並重設 DEFAULT=0。
+
+---
+
+## 📝 歷史更新（2026-05-02）- 啟動封面 + 登入歡迎頁
 
 ### 1. 啟動封面（GoGoCha cover）
 進入 App 時，Android 12+ 系統預設 SplashScreen 會顯示 `@mipmap/ic_launcher`（黑底 launcher 圖示），毫無品牌識別。

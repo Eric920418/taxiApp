@@ -286,11 +286,11 @@ fun HomeScreen(
                 // 班次狀態 banner（admin 設了排班才顯示；24/7 在班的司機看不到）
                 ShiftStatusBanner(shifts = uiState.shifts)
 
-                // GoGoCha 抽成偏好 chip row（在線時顯示）
+                // GoGoCha 折扣偏好 chip row（在線時顯示）
                 if (uiState.driverStatus == DriverAvailability.AVAILABLE) {
-                    CommissionPreferenceRow(
-                        currentPct = uiState.maxAcceptableCommissionPct,
-                        onChange = { viewModel.updateCommissionPreference(it) },
+                    DiscountPreferenceRow(
+                        currentAmount = uiState.maxAcceptableDiscountAmount,
+                        onChange = { viewModel.updateDiscountPreference(it) },
                     )
                 }
 
@@ -1778,32 +1778,33 @@ private fun ShiftStatusBanner(shifts: List<com.hualien.taxidriver.domain.model.S
 }
 
 /**
- * GoGoCha 抽成偏好 chip row
+ * GoGoCha 折扣偏好 chip row
  *
- * 司機選擇願意被平台抽最多 N%。Queue 派單時：
- *   - 訂單 commission_pct ≤ N → 司機符合資格
- *   - 排序時 N 大的優先（願意給平台多賺的優先派單）
+ * 司機選擇願意對客人讓利最多 NT$ N 元。Queue 派單時：
+ *   - 訂單 discount_amount ≤ N → 司機符合資格
+ *   - 排序時 N 大的（願意讓利多的）優先派單
  *
- * 5 段預設：10 / 30 / 50 / 80 / 100（接所有）
+ * 5 段制：0 / 10 / 20 / 30 / 40 元（0 = 全價單也接）
  */
 @Composable
-private fun CommissionPreferenceRow(
-    currentPct: Int,
+private fun DiscountPreferenceRow(
+    currentAmount: Int,
     onChange: (Int) -> Unit,
 ) {
-    val tiers = listOf(10, 30, 50, 80, 100)
+    val tiers = listOf(0, 10, 20, 30, 40)
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFF3E5F5)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(
-                "💰 我接受抽成 ≤  $currentPct%（高的優先派單）",
+                if (currentAmount == 0) "💰 我願意給客人折扣 ≤ NT$ 0 元（全價單也接）"
+                else "💰 我願意給客人折扣 ≤ NT$ $currentAmount 元（讓利多的優先派單）",
                 fontSize = 13.sp,
-                color = Color(0xFF6A1B9A),
+                color = Color(0xFFE65100),
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
@@ -1811,14 +1812,19 @@ private fun CommissionPreferenceRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                tiers.forEach { pct ->
-                    val selected = pct == currentPct
+                tiers.forEach { amt ->
+                    val selected = amt == currentAmount
                     FilterChip(
                         selected = selected,
-                        onClick = { if (!selected) onChange(pct) },
-                        label = { Text("≤$pct%", fontSize = 13.sp) },
+                        onClick = { if (!selected) onChange(amt) },
+                        label = {
+                            Text(
+                                if (amt == 0) "不打折" else "≤${amt}元",
+                                fontSize = 13.sp,
+                            )
+                        },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFF9C27B0),
+                            selectedContainerColor = Color(0xFFFF6F00),
                             selectedLabelColor = Color.White,
                         ),
                     )

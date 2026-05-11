@@ -48,6 +48,6 @@ data class QueueMyStatus(
     @SerializedName("minutes_in_queue")
     val minutesInQueue: Int? = null,
 
-    @SerializedName("max_acceptable_commission_pct")
-    val maxAcceptableCommissionPct: Int? = null,
+    @SerializedName("max_acceptable_discount_amount")
+    val maxAcceptableDiscountAmount: Int? = null,
 )
