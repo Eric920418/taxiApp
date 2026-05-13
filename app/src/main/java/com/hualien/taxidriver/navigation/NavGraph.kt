@@ -33,34 +33,34 @@ fun MainNavigation(
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                Screen.bottomNavItems.forEach { screen ->
-                    val selected = currentDestination?.hierarchy?.any {
-                        it.route == screen.route
-                    } == true
+            // v1.3.0：司機端底部導航完全移除，全部功能改由首頁 8 按鈕網格進入
+            if (Screen.bottomNavItems.isNotEmpty()) {
+                NavigationBar {
+                    Screen.bottomNavItems.forEach { screen ->
+                        val selected = currentDestination?.hierarchy?.any {
+                            it.route == screen.route
+                        } == true
 
-                    NavigationBarItem(
-                        icon = {
-                            Icon(
-                                imageVector = screen.icon,
-                                contentDescription = screen.title
-                            )
-                        },
-                        label = { Text(screen.title) },
-                        selected = selected,
-                        onClick = {
-                            navController.navigate(screen.route) {
-                                // 避免重複建立同一個destination
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+                        NavigationBarItem(
+                            icon = {
+                                Icon(
+                                    imageVector = screen.icon,
+                                    contentDescription = screen.title
+                                )
+                            },
+                            label = { Text(screen.title) },
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(screen.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
-                                // 避免同一個item被點擊多次產生多個實例
-                                launchSingleTop = true
-                                // 重新選擇前一個item時，恢復狀態
-                                restoreState = true
                             }
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -75,17 +75,18 @@ fun MainNavigation(
                     driverId = driverId,
                     driverName = driverName,
                     onNavigateToOrders = {
-                        navController.navigate(Screen.Orders.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
+                        navController.navigate(Screen.Orders.route)
+                    },
+                    onNavigateToEarnings = {
+                        navController.navigate(Screen.Earnings.route)
+                    },
+                    onNavigateToProfile = {
+                        navController.navigate(Screen.Profile.route)
                     },
                     onNavigateToPhoneReview = {
                         navController.navigate(Screen.PhoneReview.route)
-                    }
+                    },
+                    onLogout = onLogout,
                 )
             }
             composable(Screen.Orders.route) {

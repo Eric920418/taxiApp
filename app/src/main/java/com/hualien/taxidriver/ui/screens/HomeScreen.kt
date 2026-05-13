@@ -14,6 +14,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -22,8 +23,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,14 +45,16 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.domain.model.Order
 import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
-import com.hualien.taxidriver.ui.components.CompactStatusBar
+import com.hualien.taxidriver.ui.components.DiscountPreferenceSheetContent
 import com.hualien.taxidriver.ui.components.FareDialog
+import com.hualien.taxidriver.ui.components.QueueZoneSheetContent
 import com.hualien.taxidriver.ui.components.MiniVoiceChatButton
 import com.hualien.taxidriver.ui.components.RatingDialog
 import com.hualien.taxidriver.ui.components.OrderTagRow
 import com.hualien.taxidriver.ui.components.VoiceChatPanel
 import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
+import kotlinx.coroutines.launch
 import com.hualien.taxidriver.viewmodel.PhoneReviewViewModel
 
 // ====== 新 UI 顏色定義 ======
@@ -117,16 +123,28 @@ private fun isRealPhoneNumber(phone: String?): Boolean {
 /**
  * 主頁面 - 司機狀態 + 訂單管理（大按鈕版本，適合老年司機）
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     driverId: String,
     driverName: String,
     viewModel: HomeViewModel = viewModel(),
     onNavigateToOrders: (() -> Unit)? = null,
-    onNavigateToPhoneReview: (() -> Unit)? = null
+    onNavigateToEarnings: (() -> Unit)? = null,
+    onNavigateToProfile: (() -> Unit)? = null,
+    onNavigateToPhoneReview: (() -> Unit)? = null,
+    onLogout: (() -> Unit)? = null,
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+
+    // v1.3.0：sheet / dialog state — 主畫面 8 按鈕觸發
+    var showQueueSheet by remember { mutableStateOf(false) }
+    var showDiscountSheet by remember { mutableStateOf(false) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
+    val queueSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val discountSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheetScope = rememberCoroutineScope()
 
     // 電話客服審核
     val phoneReviewVm: PhoneReviewViewModel = viewModel()
@@ -287,50 +305,13 @@ fun HomeScreen(
                 // 班次狀態 banner（admin 設了排班才顯示；24/7 在班的司機看不到）
                 ShiftStatusBanner(shifts = uiState.shifts)
 
-                // GoGoCha 緊湊狀態列（排班 + 折扣設定，取代原三層浮卡）
-                if (uiState.driverStatus == DriverAvailability.AVAILABLE) {
-                    val fusedLocationClient = remember {
-                        com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
-                    }
-                    CompactStatusBar(
-                        queueZones = uiState.queueZones,
-                        myQueueStatus = uiState.myQueueStatus,
-                        currentDiscountAmount = uiState.maxAcceptableDiscountAmount,
-                        fleetPartnerName = uiState.fleetPartnerName,
-                        fleetDefaultDiscountAmount = uiState.fleetDefaultDiscountAmount,
-                        onJoinQueue = { zoneId ->
-                            try {
-                                @Suppress("MissingPermission")
-                                val task = fusedLocationClient.lastLocation
-                                task.addOnSuccessListener { loc ->
-                                    if (loc != null) {
-                                        viewModel.joinQueueZone(zoneId, loc.latitude, loc.longitude)
-                                    } else {
-                                        Toast.makeText(context, "尚未取得 GPS 位置，請稍候再試", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                                task.addOnFailureListener {
-                                    Toast.makeText(context, "GPS 取得失敗：${it.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            } catch (e: SecurityException) {
-                                Toast.makeText(context, "請先授予位置權限", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        onLeaveQueue = { viewModel.leaveQueueZone() },
-                        onChangeDiscount = { viewModel.updateDiscountPreference(it) },
-                    )
-                }
-
-                NewTopBar(title = driverName)
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                NewStatsBar(
-                    status = uiState.driverStatus,
+                // 整合式 Top Bar：返回（長按登出）+ 名字 + 今日 1單 / $XXX / X.X公里
+                CompactTopBar(
+                    driverName = driverName,
                     orderCount = uiState.todayOrderCount,
                     earnings = uiState.todayEarnings,
                     distance = uiState.todayDistance,
-                    modifier = Modifier.padding(horizontal = 16.dp)
+                    onLongPressLogout = { showLogoutDialog = true },
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -379,12 +360,22 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                NewStatusGrid(
+                MainActionGrid(
                     currentStatus = uiState.driverStatus,
+                    queueZoneName = uiState.myQueueStatus?.zoneName,
+                    queuePosition = uiState.myQueueStatus?.position,
+                    inQueue = uiState.myQueueStatus?.inQueue == true,
+                    discountAmount = uiState.maxAcceptableDiscountAmount,
+                    fleetPartnerName = uiState.fleetPartnerName,
+                    fleetDefaultDiscountAmount = uiState.fleetDefaultDiscountAmount,
                     onStatusChange = { newStatus ->
                         viewModel.updateDriverStatus(driverId, newStatus)
                     },
-                    onNavigateToOrders = onNavigateToOrders,
+                    onClickQueue = { showQueueSheet = true },
+                    onClickDiscount = { showDiscountSheet = true },
+                    onClickOrders = { onNavigateToOrders?.invoke() },
+                    onClickEarnings = { onNavigateToEarnings?.invoke() },
+                    onClickProfile = { onNavigateToProfile?.invoke() },
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 16.dp)
@@ -400,16 +391,12 @@ fun HomeScreen(
                     .background(ScreenBackground)
                     .verticalScroll(rememberScrollState())
             ) {
-                NewTopBar(title = "返回主頁")
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                NewStatsBar(
-                    status = uiState.driverStatus,
+                CompactTopBar(
+                    driverName = driverName,
                     orderCount = uiState.todayOrderCount,
                     earnings = uiState.todayEarnings,
                     distance = uiState.todayDistance,
-                    modifier = Modifier.padding(horizontal = 16.dp)
+                    onLongPressLogout = { showLogoutDialog = true },
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -1141,6 +1128,76 @@ fun HomeScreen(
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
+
+        // ====== 排班區選擇 sheet（主畫面「排班」按鈕觸發）======
+        if (showQueueSheet) {
+            val fusedLocationClient = remember {
+                com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+            }
+            ModalBottomSheet(
+                onDismissRequest = { showQueueSheet = false },
+                sheetState = queueSheetState,
+            ) {
+                QueueZoneSheetContent(
+                    zones = uiState.queueZones,
+                    myStatus = uiState.myQueueStatus,
+                    onJoin = { zoneId ->
+                        try {
+                            @Suppress("MissingPermission")
+                            val task = fusedLocationClient.lastLocation
+                            task.addOnSuccessListener { loc ->
+                                if (loc != null) {
+                                    viewModel.joinQueueZone(zoneId, loc.latitude, loc.longitude)
+                                } else {
+                                    Toast.makeText(context, "尚未取得 GPS 位置，請稍候再試", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            task.addOnFailureListener {
+                                Toast.makeText(context, "GPS 取得失敗：${it.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: SecurityException) {
+                            Toast.makeText(context, "請先授予位置權限", Toast.LENGTH_SHORT).show()
+                        }
+                        sheetScope.launch { queueSheetState.hide() }
+                            .invokeOnCompletion { showQueueSheet = false }
+                    },
+                    onLeave = {
+                        viewModel.leaveQueueZone()
+                        sheetScope.launch { queueSheetState.hide() }
+                            .invokeOnCompletion { showQueueSheet = false }
+                    },
+                )
+            }
+        }
+
+        // ====== 折扣偏好 sheet（主畫面「折扣」按鈕觸發）======
+        if (showDiscountSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showDiscountSheet = false },
+                sheetState = discountSheetState,
+            ) {
+                DiscountPreferenceSheetContent(
+                    currentAmount = uiState.maxAcceptableDiscountAmount,
+                    fleetPartnerName = uiState.fleetPartnerName,
+                    onChange = { amt ->
+                        viewModel.updateDiscountPreference(amt)
+                        sheetScope.launch { discountSheetState.hide() }
+                            .invokeOnCompletion { showDiscountSheet = false }
+                    },
+                )
+            }
+        }
+
+        // ====== 登出確認對話框（CompactTopBar 長按觸發）======
+        if (showLogoutDialog) {
+            LogoutConfirmDialog(
+                onConfirm = {
+                    showLogoutDialog = false
+                    onLogout?.invoke()
+                },
+                onDismiss = { showLogoutDialog = false },
+            )
+        }
     }
 }
 
@@ -1149,11 +1206,23 @@ fun HomeScreen(
 // ================================================================
 
 /**
- * 藍色漸層頂部欄
+ * v1.3.0 整合式 Top Bar
+ *
+ * 結構：[長按登出區｜返回箭頭+名字] | 1單 | $XXX | X.X公里
+ * 老人友善：
+ *  - 長按 800ms 才登出（短按無作用，避免誤觸）
+ *  - 統計三段用 weight 平均分佈、中央對齊
+ *  - 字級壓低（16/11sp），讓三段資訊在一條 bar 不擁擠
  */
 @Composable
-private fun NewTopBar(title: String) {
-    Box(
+private fun CompactTopBar(
+    driverName: String,
+    orderCount: Int,
+    earnings: Int,
+    distance: Double,
+    onLongPressLogout: () -> Unit,
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(
@@ -1161,229 +1230,226 @@ private fun NewTopBar(title: String) {
                     colors = listOf(HeaderGradientStart, HeaderGradientEnd)
                 )
             )
-            .padding(horizontal = 16.dp, vertical = 16.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Default.ArrowBack,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-/**
- * 今日統計欄
- */
-@Composable
-private fun NewStatsBar(
-    status: DriverAvailability,
-    orderCount: Int,
-    earnings: Int,
-    distance: Double,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            // 狀態行
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "今日",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = DarkText
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(
-                            when (status) {
-                                DriverAvailability.AVAILABLE -> StatusGreen
-                                DriverAvailability.REST -> StatusOrange
-                                DriverAvailability.ON_TRIP -> StatusBlue
-                                DriverAvailability.OFFLINE -> StatusGray
-                            }
-                        )
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = when (status) {
-                        DriverAvailability.AVAILABLE -> "可接單中"
-                        DriverAvailability.REST -> "休息中"
-                        DriverAvailability.ON_TRIP -> "載客中"
-                        DriverAvailability.OFFLINE -> "已離線"
-                    },
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = when (status) {
-                        DriverAvailability.AVAILABLE -> StatusGreen
-                        DriverAvailability.REST -> StatusOrange
-                        DriverAvailability.ON_TRIP -> StatusBlue
-                        DriverAvailability.OFFLINE -> StatusGray
-                    }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 統計行
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "${orderCount}單",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = DarkText
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(24.dp)
-                        .background(Color(0xFFE0E0E0))
-                )
-
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "$earnings",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = DarkText
-                    )
-                    Text(
-                        text = "收入",
-                        fontSize = 12.sp,
-                        color = SubText
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(24.dp)
-                        .background(Color(0xFFE0E0E0))
-                )
-
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "${String.format("%.1f", distance)}公里",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = DarkText
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 2x2 狀態按鈕網格（無訂單時顯示）
- */
-@Composable
-private fun NewStatusGrid(
-    currentStatus: DriverAvailability,
-    onStatusChange: (DriverAvailability) -> Unit,
-    onNavigateToOrders: (() -> Unit)?,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // 上排：離線 + 休息
+        // 左：長按登出區（返回箭頭 + 名字）
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                .weight(1.4f)
+                .pointerInput(Unit) {
+                    detectTapGestures(onLongPress = { onLongPressLogout() })
+                }
+                .padding(end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            StatusGridButton(
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "長按登出",
+                tint = Color.White,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = driverName,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        // 分隔線
+        Box(
+            modifier = Modifier
+                .width(1.dp)
+                .height(28.dp)
+                .background(Color.White.copy(alpha = 0.3f))
+        )
+
+        TopBarStat(value = "${orderCount}單", label = "今日", modifier = Modifier.weight(1f))
+
+        Box(
+            modifier = Modifier
+                .width(1.dp)
+                .height(28.dp)
+                .background(Color.White.copy(alpha = 0.3f))
+        )
+
+        TopBarStat(value = "$$earnings", label = "收入", modifier = Modifier.weight(1f))
+
+        Box(
+            modifier = Modifier
+                .width(1.dp)
+                .height(28.dp)
+                .background(Color.White.copy(alpha = 0.3f))
+        )
+
+        TopBarStat(value = "${String.format("%.1f", distance)}km", label = "里程", modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun TopBarStat(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = value,
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.75f),
+            fontSize = 11.sp,
+        )
+    }
+}
+
+/**
+ * v1.3.0 主畫面 4x2 大按鈕網格
+ *
+ * 排版：
+ *   row 0: [排班]      [離線]
+ *   row 1: [接單]      [休息]
+ *   row 2: [訂單]      [收入]
+ *   row 3: [我的]      [折扣]
+ *
+ * 視覺規則：
+ *   - 互斥狀態（離線/接單/休息）：active 時綠底 + 勾號 + 白字
+ *   - 排班：未加入白底；已加入綠底 + 勾號 + 顯示「#3 花蓮車站」
+ *   - 折扣：白底 + 副標顯示當前值「≤20元」或「全價」
+ *   - 訂單/收入/我的：純功能入口，白底
+ */
+@Composable
+private fun MainActionGrid(
+    currentStatus: DriverAvailability,
+    queueZoneName: String?,
+    queuePosition: Int?,
+    inQueue: Boolean,
+    discountAmount: Int,
+    fleetPartnerName: String?,
+    fleetDefaultDiscountAmount: Int?,
+    onStatusChange: (DriverAvailability) -> Unit,
+    onClickQueue: () -> Unit,
+    onClickDiscount: () -> Unit,
+    onClickOrders: () -> Unit,
+    onClickEarnings: () -> Unit,
+    onClickProfile: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isFleetDriver = fleetPartnerName != null
+    val displayDiscount = if (isFleetDriver) (fleetDefaultDiscountAmount ?: 0) else discountAmount
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // row 0: 排班 | 離線
+        MainActionRow {
+            MainActionButton(
+                label = if (inQueue) "排班 #${queuePosition ?: "-"}" else "排班",
+                subLabel = if (inQueue) (queueZoneName ?: "") else null,
+                icon = Icons.Default.Schedule,
+                isActive = inQueue,
+                onClick = onClickQueue,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            MainActionButton(
                 label = "離線",
+                icon = Icons.Default.PowerSettingsNew,
                 isActive = currentStatus == DriverAvailability.OFFLINE,
                 activeColor = Color(0xFF78909C),
                 onClick = { onStatusChange(DriverAvailability.OFFLINE) },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
+                modifier = Modifier.weight(1f).fillMaxHeight()
             )
-            StatusGridButton(
+        }
+        // row 1: 接單 | 休息
+        MainActionRow {
+            MainActionButton(
+                label = "接單",
+                icon = Icons.Default.CheckCircle,
+                isActive = currentStatus == DriverAvailability.AVAILABLE,
+                activeColor = ButtonActiveGreen,
+                onClick = { onStatusChange(DriverAvailability.AVAILABLE) },
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            MainActionButton(
                 label = "休息",
+                icon = Icons.Default.PauseCircle,
                 isActive = currentStatus == DriverAvailability.REST,
                 activeColor = StatusOrange,
                 onClick = { onStatusChange(DriverAvailability.REST) },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
+                modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
-
-        // 下排：可接單 + 訂單
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatusGridButton(
-                label = "可接單",
-                isActive = currentStatus == DriverAvailability.AVAILABLE,
-                activeColor = ButtonActiveGreen,
-                showCheckmark = currentStatus == DriverAvailability.AVAILABLE,
-                onClick = { onStatusChange(DriverAvailability.AVAILABLE) },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            )
-            StatusGridButton(
+        // row 2: 訂單 | 收入
+        MainActionRow {
+            MainActionButton(
                 label = "訂單",
-                isActive = false,
-                activeColor = ActionBlue,
-                onClick = { onNavigateToOrders?.invoke() },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
+                icon = Icons.AutoMirrored.Filled.List,
+                onClick = onClickOrders,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            MainActionButton(
+                label = "收入",
+                icon = Icons.Default.AttachMoney,
+                onClick = onClickEarnings,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+        }
+        // row 3: 我的 | 折扣
+        MainActionRow {
+            MainActionButton(
+                label = "我的",
+                icon = Icons.Default.Person,
+                onClick = onClickProfile,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            MainActionButton(
+                label = "折扣",
+                subLabel = if (displayDiscount == 0) "全價" else "≤${displayDiscount}元",
+                icon = Icons.Default.LocalOffer,
+                onClick = onClickDiscount,
+                modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
     }
 }
 
+@Composable
+private fun MainActionRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        content = content,
+    )
+}
+
 /**
- * 單個網格按鈕
+ * 8 按鈕通用樣板：大圖示 + 大文字（給老人看）
+ * Active 時用 activeColor 高亮 + 勾號
  */
 @Composable
-private fun StatusGridButton(
+private fun MainActionButton(
     label: String,
-    isActive: Boolean,
-    activeColor: Color,
-    showCheckmark: Boolean = false,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier,
+    subLabel: String? = null,
+    isActive: Boolean = false,
+    activeColor: Color = ButtonActiveGreen,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
 ) {
     Card(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.height(110.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isActive) activeColor else Color.White
@@ -1391,79 +1457,77 @@ private fun StatusGridButton(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().padding(8.dp),
             contentAlignment = Alignment.Center
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                if (showCheckmark) {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = Icons.Default.CheckCircle,
+                        imageVector = icon,
                         contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.9f),
+                        tint = if (isActive) Color.White else DarkText,
                         modifier = Modifier.size(36.dp)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    if (isActive) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .align(Alignment.BottomEnd)
+                        )
+                    }
                 }
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = label,
-                    fontSize = 28.sp,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (isActive) Color.White else DarkText
+                    color = if (isActive) Color.White else DarkText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                if (subLabel != null) {
+                    Text(
+                        text = subLabel,
+                        fontSize = 12.sp,
+                        color = if (isActive) Color.White.copy(alpha = 0.85f) else SubText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
 }
 
 /**
- * 底部狀態指示器（不可點擊，僅顯示當前狀態）
+ * 登出確認對話框（CompactTopBar 長按返回箭頭觸發）
  */
 @Composable
-private fun StatusIndicatorBar(
-    status: DriverAvailability,
-    modifier: Modifier = Modifier
+private fun LogoutConfirmDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
-    val bgColor = when (status) {
-        DriverAvailability.AVAILABLE -> ButtonActiveGreen
-        DriverAvailability.ON_TRIP -> StatusBlue
-        DriverAvailability.REST -> StatusOrange
-        DriverAvailability.OFFLINE -> StatusGray
-    }
-
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = bgColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = when (status) {
-                    DriverAvailability.AVAILABLE -> "可接單"
-                    DriverAvailability.ON_TRIP -> "載客中"
-                    DriverAvailability.REST -> "休息中"
-                    DriverAvailability.OFFLINE -> "已離線"
-                },
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "目前狀態",
-                fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.8f)
-            )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("確定要登出嗎？", fontWeight = FontWeight.Bold, fontSize = 20.sp) },
+        text = { Text("登出後需要重新用手機號碼登入。", fontSize = 16.sp) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("登出", color = Color(0xFFD32F2F), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", fontSize = 16.sp)
+            }
         }
-    }
+    )
 }
 
 /**

@@ -37,10 +37,8 @@ sealed class Screen(
     object RoleSelection : Screen("role_selection", "角色選擇", Icons.Default.Settings)
 
     companion object {
-        // 司機端底部導航
-        val driverBottomNavItems: List<Screen> by lazy {
-            listOf(Home, Orders, Earnings, Profile)
-        }
+        // 司機端底部導航 — v1.3.0 起改為主畫面 8 按鈕網格，底部導航完全移除
+        val driverBottomNavItems: List<Screen> by lazy { emptyList<Screen>() }
 
         // 乘客端底部導航（語音模式為首頁）
         val passengerBottomNavItems: List<Screen> by lazy {

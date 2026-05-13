@@ -50,4 +50,8 @@ data class QueueMyStatus(
 
     @SerializedName("max_acceptable_discount_amount")
     val maxAcceptableDiscountAmount: Int? = null,
+
+    /** 在該排班區的順位（1-based，依 joined_at FIFO） */
+    @SerializedName("position")
+    val position: Int? = null,
 )

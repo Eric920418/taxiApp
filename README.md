@@ -1,9 +1,85 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.2.9（beta29）| 更新日期：2026-05-11
+> 版本：v1.4.0（beta31）| 更新日期：2026-05-13
 
-## 📝 最新更新（2026-05-11 晚）- 司機 App 首頁整合：CompactStatusBar
+## 📝 最新更新（2026-05-13）- 司機端首頁大改版：4x2 大按鈕 + 整合 Top Bar
+
+### 問題
+v1.2.9 雖然把三層浮卡合併成 CompactStatusBar，但首頁元素仍多（NewTopBar + NewStatsBar + CompactStatusBar + NewStatusGrid + ShiftStatusBanner + 電話客服提示卡），對老年司機視覺壓力大。功能入口分散在 3 個地方：訂單/收入在底部 nav、排班/折扣在 CompactStatusBar、離線/休息/接單在 NewStatusGrid，老人記不住「在哪裡點什麼」。
+
+### 解法：整頁只剩兩個區塊
+- **CompactTopBar**（單條藍色漸層 bar）：`[長按登出] 名字 | 1單 | $XXX | X.X km`
+- **MainActionGrid**（4x2 大按鈕）：`(排班)(離線) / (接單)(休息) / (訂單)(收入) / (我的)(折扣)`
+
+```
+┌─────────────────────────────────────────────┐
+│ ← 司機名字 │ 1單  │ $100 │ 0.8km          │  CompactTopBar
+├─────────────────────────────────────────────┤
+│ ┌─排班─#3花蓮車站──┐ ┌─離線──────────────┐ │
+│ │ 🕐               │ │ ⏻                 │ │
+│ │ 排班 #3 ✓        │ │ 離線               │ │
+│ └──────────────────┘ └────────────────────┘ │
+│ ┌─接單─────────────┐ ┌─休息──────────────┐ │
+│ │ ✓ (active 綠底)  │ │ ⏸                 │ │
+│ └──────────────────┘ └────────────────────┘ │
+│ ┌─訂單─────────────┐ ┌─收入──────────────┐ │
+│ │ ☰                │ │ $                  │ │
+│ └──────────────────┘ └────────────────────┘ │
+│ ┌─我的─────────────┐ ┌─折扣──────────────┐ │
+│ │ 👤               │ │ 🏷  ≤20元          │ │
+│ └──────────────────┘ └────────────────────┘ │
+└─────────────────────────────────────────────┘
+```
+
+### 主要變更
+
+#### 後端（`~/Desktop/HualienTaxiServer`）
+- `GET /api/queue/my-status` 回傳新增 `position` 欄位（依 `joined_at` ASC 排序的 1-based 順位）
+- `POST /api/queue/join` 回應同步附 `position`
+- 計算用 correlated subquery：`SELECT COUNT(*) + 1 FROM queue_entries WHERE zone_id = ? AND status = 'ACTIVE' AND joined_at < self.joined_at`
+
+#### 前端
+- **新增**（HomeScreen.kt 內）：`CompactTopBar` / `TopBarStat` / `MainActionGrid` / `MainActionRow` / `MainActionButton` / `LogoutConfirmDialog`
+- **刪除**（HomeScreen.kt 內，~280 行死碼）：`NewTopBar` / `NewStatsBar` / `NewStatusGrid` / `StatusGridButton` / `StatusIndicatorBar`
+- **CompactStatusBar.kt 重構**：刪除主元件 `CompactStatusBar` + `CompactBlock` 私有函式；保留並 promote `QueueZoneSheetContent` / `DiscountPreferenceSheetContent` 為 `internal`，供 HomeScreen 直接呼叫
+- **底部導航完全移除**（NavGraph.kt + Screen.kt）：`driverBottomNavItems` 改 `emptyList()`；NavGraph 條件渲染 `bottomBar`；HomeScreen 加 `onNavigateToEarnings` / `onNavigateToProfile` / `onLogout` callbacks
+- **QueueMyStatus model**：新增 `position: Int?` 欄位
+- 排班 sheet 標題列也顯示順位：「您目前已加入「花蓮車站」排班，順位 #3（已 5 分鐘）」
+
+### 設計取捨（與使用者已對齊）
+- **8 按鈕 vs 老人友善**：用大圖示（36dp）+ 大文字（18sp）+ 卡片高度 110dp 補償按鈕變多帶來的縮小
+- **互斥狀態（離線/接單/休息）為何不合併成單一狀態切換按鈕**：使用者明確要 8 顆並列；用 active 綠底 + 勾號回饋當前狀態（不是純 toggle）
+- **長按 800ms 才登出 vs 直接登出按鈕**：避免老人誤觸（短按無作用，需明確長按手勢）
+- **排班「順位」由後端算**：不在前端推算（避免 race condition），後端 SQL `joined_at < self` count + 1
+- **折扣按鈕直接顯示「≤20元」**：老人不用點開就知道當前設定，減少操作層級
+
+### 圖示對應（Material Icons）
+| 按鈕 | Icon | 說明 |
+|------|------|------|
+| 排班 | `Icons.Default.Schedule` | 時鐘 |
+| 離線 | `Icons.Default.PowerSettingsNew` | 電源 |
+| 接單 | `Icons.Default.CheckCircle` | 大勾 |
+| 休息 | `Icons.Default.PauseCircle` | 暫停 |
+| 訂單 | `Icons.AutoMirrored.Filled.List` | 清單 |
+| 收入 | `Icons.Default.AttachMoney` | $ |
+| 我的 | `Icons.Default.Person` | 人像 |
+| 折扣 | `Icons.Default.LocalOffer` | 標籤 |
+
+### 影響檔案
+- 後端：`src/api/queue.ts`
+- 前端：
+  - `app/build.gradle.kts`（versionCode 30→31, versionName 1.3.0→1.4.0）
+  - `app/src/main/play/release-notes/zh-TW/default.txt`
+  - `app/src/main/java/com/hualien/taxidriver/domain/model/QueueZone.kt`
+  - `app/src/main/java/com/hualien/taxidriver/navigation/Screen.kt`
+  - `app/src/main/java/com/hualien/taxidriver/navigation/NavGraph.kt`
+  - `app/src/main/java/com/hualien/taxidriver/ui/screens/HomeScreen.kt`
+  - `app/src/main/java/com/hualien/taxidriver/ui/components/CompactStatusBar.kt`
+
+---
+
+## 📝 歷史更新（2026-05-11 晚）- 司機 App 首頁整合：CompactStatusBar
 
 ### 問題
 v1.2.8 把 `CommissionPreferenceRow`（% 抽成 chip）改成 `DiscountPreferenceRow`（元折扣 chip），但 user 反映「太醜太占空間又難用」。首頁有三層浮卡垂直堆疊（班次 banner + 折扣 chip row + 排班 zone bar），各自帶 12-16dp padding，佔掉螢幕高度約 25%。
