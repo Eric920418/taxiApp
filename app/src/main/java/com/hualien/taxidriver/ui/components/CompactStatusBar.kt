@@ -63,11 +63,16 @@ fun CompactStatusBar(
     queueZones: List<QueueZone>,
     myQueueStatus: QueueMyStatus?,
     currentDiscountAmount: Int,
+    fleetPartnerName: String? = null,
+    fleetDefaultDiscountAmount: Int? = null,
     onJoinQueue: (zoneId: String) -> Unit,
     onLeaveQueue: () -> Unit,
     onChangeDiscount: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val isFleetDriver = fleetPartnerName != null
+    val displayDiscount = if (isFleetDriver) (fleetDefaultDiscountAmount ?: 0) else currentDiscountAmount
+
     var showQueueSheet by remember { mutableStateOf(false) }
     var showDiscountSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -98,14 +103,18 @@ fun CompactStatusBar(
             enabled = queueZones.isNotEmpty() || inQueue,
         )
 
-        // 右：折扣
+        // 右：折扣（車隊司機顯示車隊統一金額，不可調）
         CompactBlock(
             modifier = Modifier.weight(1f),
-            containerColor = Color(0xFFFFF8E1),
-            titleColor = Color(0xFFE65100),
-            icon = "💰",
-            title = if (currentDiscountAmount == 0) "不打折" else "≤ $currentDiscountAmount 元",
-            subtitle = if (currentDiscountAmount == 0) "全價單也接" else "讓利多的優先派",
+            containerColor = if (isFleetDriver) Color(0xFFECEFF1) else Color(0xFFFFF8E1),
+            titleColor = if (isFleetDriver) Color(0xFF455A64) else Color(0xFFE65100),
+            icon = if (isFleetDriver) "🔒" else "💰",
+            title = if (displayDiscount == 0) "不打折" else "${displayDiscount} 元",
+            subtitle = when {
+                isFleetDriver -> "${fleetPartnerName} 統一（不可變）"
+                displayDiscount == 0 -> "全價單也接"
+                else -> "讓利多的優先派"
+            },
             onClick = { showDiscountSheet = true },
         )
     }
@@ -140,7 +149,8 @@ fun CompactStatusBar(
             sheetState = discountSheetState,
         ) {
             DiscountPreferenceSheetContent(
-                currentAmount = currentDiscountAmount,
+                currentAmount = displayDiscount,
+                fleetPartnerName = fleetPartnerName,
                 onChange = { amt ->
                     onChangeDiscount(amt)
                     scope.launch { discountSheetState.hide() }
@@ -307,23 +317,28 @@ private fun QueueZoneSheetContent(
 @Composable
 private fun DiscountPreferenceSheetContent(
     currentAmount: Int,
+    fleetPartnerName: String? = null,
     onChange: (Int) -> Unit,
 ) {
     val tiers = listOf(0, 10, 20, 30, 40)
+    val isFleetDriver = fleetPartnerName != null
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 8.dp),
     ) {
         Text(
-            text = "💰 願意給客人折扣",
+            text = if (isFleetDriver) "🔒 車隊統一折扣" else "💰 願意給客人折扣",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFE65100),
+            color = if (isFleetDriver) Color(0xFF455A64) else Color(0xFFE65100),
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "您能接受的最高折扣（NT$ 元）。讓利多的優先派單，0 = 全價單也接。",
+            text = if (isFleetDriver)
+                "您屬於「${fleetPartnerName}」，折扣由車隊統一設定為 NT$ $currentAmount 元，不可自行調整。如需更改請聯絡車隊。"
+            else
+                "您能接受的最高折扣（NT$ 元）。讓利多的優先派單，0 = 全價單也接。",
             fontSize = 13.sp,
             color = Color(0xFF666666),
         )
@@ -337,7 +352,8 @@ private fun DiscountPreferenceSheetContent(
                 val selected = amt == currentAmount
                 FilterChip(
                     selected = selected,
-                    onClick = { if (!selected) onChange(amt) },
+                    enabled = !isFleetDriver,
+                    onClick = { if (!selected && !isFleetDriver) onChange(amt) },
                     label = {
                         Text(
                             text = if (amt == 0) "不打折" else "≤${amt}元",
@@ -345,7 +361,7 @@ private fun DiscountPreferenceSheetContent(
                         )
                     },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFFF6F00),
+                        selectedContainerColor = if (isFleetDriver) Color(0xFF607D8B) else Color(0xFFFF6F00),
                         selectedLabelColor = Color.White,
                     ),
                     modifier = Modifier.weight(1f),

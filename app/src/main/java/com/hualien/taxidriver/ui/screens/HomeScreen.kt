@@ -296,6 +296,8 @@ fun HomeScreen(
                         queueZones = uiState.queueZones,
                         myQueueStatus = uiState.myQueueStatus,
                         currentDiscountAmount = uiState.maxAcceptableDiscountAmount,
+                        fleetPartnerName = uiState.fleetPartnerName,
+                        fleetDefaultDiscountAmount = uiState.fleetDefaultDiscountAmount,
                         onJoinQueue = { zoneId ->
                             try {
                                 @Suppress("MissingPermission")

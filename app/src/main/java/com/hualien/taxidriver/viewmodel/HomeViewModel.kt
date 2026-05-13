@@ -89,7 +89,9 @@ data class HomeUiState(
     val queueLoading: Boolean = false,
 
     // === GoGoCha 抽成接受度（司機願意被平台抽最高 N%）===
-    val maxAcceptableDiscountAmount: Int = 0
+    val maxAcceptableDiscountAmount: Int = 0,
+    val fleetPartnerName: String? = null,
+    val fleetDefaultDiscountAmount: Int? = null
 )
 
 /**
@@ -1378,6 +1380,8 @@ class HomeViewModel : ViewModel() {
                         _uiState.value = _uiState.value.copy(
                             shifts = driver.shifts,
                             maxAcceptableDiscountAmount = driver.maxAcceptableDiscountAmount,
+                            fleetPartnerName = driver.fleetPartnerName,
+                            fleetDefaultDiscountAmount = driver.fleetDefaultDiscountAmount,
                         )
                         android.util.Log.d("HomeViewModel", "✅ 班次：${driver.shifts.size}段，折扣接受度：${driver.maxAcceptableDiscountAmount} 元")
                     }
@@ -1392,6 +1396,14 @@ class HomeViewModel : ViewModel() {
      * 更新司機的抽成接受度（GoGoCha Queue 媒合用）
      */
     fun updateDiscountPreference(newPct: Int) {
+        // 車隊司機折扣由車隊統一管理，不可自行調整
+        if (_uiState.value.fleetPartnerName != null) {
+            _uiState.value = _uiState.value.copy(
+                error = "您屬於「${_uiState.value.fleetPartnerName}」車隊，折扣統一為 ${_uiState.value.fleetDefaultDiscountAmount ?: 0} 元（不可變）。如需調整請聯絡車隊。"
+            )
+            return
+        }
+
         viewModelScope.launch {
             val driverId = currentDriverId ?: return@launch
             // 樂觀更新 UI

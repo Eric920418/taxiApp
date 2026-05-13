@@ -40,10 +40,25 @@ data class Driver(
     /**
      * GoGoCha 折扣接受度：司機願意對客人讓利最高 NT$ N 元。
      * 影響 Queue 排班媒合：訂單 discount_amount ≤ 此值才會被派；高的（願意讓利多的）優先派。
-     * 預設 0 元 = 全價單也接（最低門檻）。
+     *
+     * 兩種來源：
+     *   - 車隊司機 (fleetPartnerId != null)：強制 = fleetDefaultDiscountAmount，自己不能改
+     *   - 外部司機：自己選 5 段 chip
      */
     @SerializedName("maxAcceptableDiscountAmount")
     val maxAcceptableDiscountAmount: Int = 0,
+
+    /** 司機 PRIMARY_FLEET partner id；null = 外部司機（無車隊綁定） */
+    @SerializedName("fleetPartnerId")
+    val fleetPartnerId: String? = null,
+
+    /** 車隊顯示名稱（給 App UI 用），如「花蓮大豐車隊」 */
+    @SerializedName("fleetPartnerName")
+    val fleetPartnerName: String? = null,
+
+    /** 車隊統一折扣金額；null = 此司機未綁車隊 */
+    @SerializedName("fleetDefaultDiscountAmount")
+    val fleetDefaultDiscountAmount: Int? = null,
 )
 
 /**
