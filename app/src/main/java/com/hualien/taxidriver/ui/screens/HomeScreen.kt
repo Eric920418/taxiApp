@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.ui.input.pointer.pointerInput
@@ -1353,16 +1352,15 @@ private fun MainActionGrid(
         // row 0: 排班 | 離線
         MainActionRow {
             MainActionButton(
-                label = if (inQueue) "排班 #${queuePosition ?: "-"}" else "排班",
+                label = "排班",
                 subLabel = if (inQueue) (queueZoneName ?: "") else null,
-                icon = Icons.Default.Schedule,
+                subLabel2 = if (inQueue) "#${queuePosition ?: "-"}" else null,
                 isActive = inQueue,
                 onClick = onClickQueue,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MainActionButton(
                 label = "離線",
-                icon = Icons.Default.PowerSettingsNew,
                 isActive = currentStatus == DriverAvailability.OFFLINE,
                 activeColor = Color(0xFF78909C),
                 onClick = { onStatusChange(DriverAvailability.OFFLINE) },
@@ -1373,7 +1371,6 @@ private fun MainActionGrid(
         MainActionRow {
             MainActionButton(
                 label = "接單",
-                icon = Icons.Default.CheckCircle,
                 isActive = currentStatus == DriverAvailability.AVAILABLE,
                 activeColor = ButtonActiveGreen,
                 onClick = { onStatusChange(DriverAvailability.AVAILABLE) },
@@ -1381,7 +1378,6 @@ private fun MainActionGrid(
             )
             MainActionButton(
                 label = "休息",
-                icon = Icons.Default.PauseCircle,
                 isActive = currentStatus == DriverAvailability.REST,
                 activeColor = StatusOrange,
                 onClick = { onStatusChange(DriverAvailability.REST) },
@@ -1392,13 +1388,11 @@ private fun MainActionGrid(
         MainActionRow {
             MainActionButton(
                 label = "訂單",
-                icon = Icons.AutoMirrored.Filled.List,
                 onClick = onClickOrders,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MainActionButton(
                 label = "收入",
-                icon = Icons.Default.AttachMoney,
                 onClick = onClickEarnings,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
@@ -1407,14 +1401,12 @@ private fun MainActionGrid(
         MainActionRow {
             MainActionButton(
                 label = "我的",
-                icon = Icons.Default.Person,
                 onClick = onClickProfile,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MainActionButton(
                 label = "折扣",
                 subLabel = if (displayDiscount == 0) "全價" else "≤${displayDiscount}元",
-                icon = Icons.Default.LocalOffer,
                 onClick = onClickDiscount,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
@@ -1434,19 +1426,31 @@ private fun MainActionRow(content: @Composable RowScope.() -> Unit) {
 }
 
 /**
- * 8 按鈕通用樣板：大圖示 + 大文字（給老人看）
- * Active 時用 activeColor 高亮 + 勾號
+ * 8 按鈕通用樣板：純大字（老人友善，不用圖示）
+ *
+ * 排版模式（依 subLabel / subLabel2 自動決定）：
+ *   - 單行：32sp 巨大主標（離線/接單/休息/訂單/收入/我的）
+ *   - 二行：26sp 主標 + 16sp 副標（折扣 / ≤20元）
+ *   - 三行：22sp 主標 + 18sp 副標1 + 22sp 副標2 粗體（排班 / 花蓮車站 / #3）
+ *
+ * Active 時 activeColor 整片高亮 + 主標前綴 ✓（雙重視覺回饋取代原圖示）
  */
 @Composable
 private fun MainActionButton(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier,
     subLabel: String? = null,
+    subLabel2: String? = null,
     isActive: Boolean = false,
     activeColor: Color = ButtonActiveGreen,
     onClick: () -> Unit,
 ) {
+    val mainFontSize = when {
+        subLabel2 != null -> 22.sp
+        subLabel != null -> 26.sp
+        else -> 32.sp
+    }
+
     Card(
         onClick = onClick,
         modifier = modifier.height(110.dp),
@@ -1464,40 +1468,33 @@ private fun MainActionButton(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = if (isActive) Color.White else DarkText,
-                        modifier = Modifier.size(36.dp)
-                    )
-                    if (isActive) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier
-                                .size(16.dp)
-                                .align(Alignment.BottomEnd)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = label,
-                    fontSize = 18.sp,
+                    text = if (isActive) "✓ $label" else label,
+                    fontSize = mainFontSize,
                     fontWeight = FontWeight.Bold,
                     color = if (isActive) Color.White else DarkText,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (subLabel != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = subLabel,
-                        fontSize = 12.sp,
-                        color = if (isActive) Color.White.copy(alpha = 0.85f) else SubText,
+                        fontSize = if (subLabel2 != null) 18.sp else 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (isActive) Color.White.copy(alpha = 0.92f) else SubText,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (subLabel2 != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = subLabel2,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isActive) Color.White else DarkText,
+                        maxLines = 1,
                     )
                 }
             }

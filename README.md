@@ -1,9 +1,37 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.4.0（beta31）| 更新日期：2026-05-13
+> 版本：v1.4.1（beta32）| 更新日期：2026-05-13
 
-## 📝 最新更新（2026-05-13）- 司機端首頁大改版：4x2 大按鈕 + 整合 Top Bar
+## 📝 最新更新（2026-05-13 二版）- 主畫面 8 按鈕去圖示化 + 排班三行顯示
+
+### 問題
+v1.4.0 的 8 按鈕配 Material Icon + 18sp 文字，user 反映「老人看不認得圖示，字也不夠大」。
+
+### 解法：純文字、字級階梯化
+`MainActionButton` 移除 `icon: ImageVector` 參數，改用 `subLabel: String?` + `subLabel2: String?` 兩個 nullable 副標欄位驅動三種版面：
+
+| 模式 | 觸發條件 | 主標字級 | 副標字級 | 用於 |
+|------|---------|---------|---------|------|
+| 單行 | subLabel=null, subLabel2=null | 32sp | — | 離線/接單/休息/訂單/收入/我的 |
+| 二行 | subLabel≠null, subLabel2=null | 26sp | 16sp | 折扣（「折扣 / ≤20元」）|
+| 三行 | subLabel2≠null | 22sp | 18sp + 22sp 粗體 | 排班已加入（「✓ 排班 / 花蓮車站 / #3」）|
+
+**Active 視覺**：拿掉圖示後 `Icons.Default.CheckCircle` 失去附著點，改用文字前綴 `✓ $label` + activeColor 整片高亮做雙重回饋。
+
+### 影響檔案
+- `app/build.gradle.kts`（versionCode 31→32, versionName 1.4.0→1.4.1）
+- `app/src/main/play/release-notes/zh-TW/default.txt`
+- `app/src/main/java/com/hualien/taxidriver/ui/screens/HomeScreen.kt`（`MainActionButton` 簽名變更 + 8 個呼叫端去 icon）
+
+### 設計取捨
+- **為何完全去圖示**：使用者領域知識（花蓮計程車司機平均年齡偏高），認字快於認圖
+- **為何主標字級用 when 表達式而非 const**：三種版面字級不同，把邏輯收在元件內部，呼叫端不用煩惱字級
+- **為何 ✓ 用文字而非小 Icon**：拿掉所有 Icon 才能視覺一致；字串前綴在 RTL/字型 fallback 都比 absolute-positioned icon 穩定
+
+---
+
+## 📝 歷史更新（2026-05-13）- 司機端首頁大改版：4x2 大按鈕 + 整合 Top Bar
 
 ### 問題
 v1.2.9 雖然把三層浮卡合併成 CompactStatusBar，但首頁元素仍多（NewTopBar + NewStatsBar + CompactStatusBar + NewStatusGrid + ShiftStatusBanner + 電話客服提示卡），對老年司機視覺壓力大。功能入口分散在 3 個地方：訂單/收入在底部 nav、排班/折扣在 CompactStatusBar、離線/休息/接單在 NewStatusGrid，老人記不住「在哪裡點什麼」。
