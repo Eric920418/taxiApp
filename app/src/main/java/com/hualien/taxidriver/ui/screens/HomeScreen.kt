@@ -1346,11 +1346,12 @@ private fun MainActionGrid(
     val displayDiscount = if (isFleetDriver) (fleetDefaultDiscountAmount ?: 0) else discountAmount
 
     Column(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // 4 row 用 ColumnScope.weight(1f) 平均分剩餘垂直空間，按鈕高度自動撐到最大
         // row 0: 排班 | 離線
-        MainActionRow {
+        MainActionRow(modifier = Modifier.weight(1f)) {
             MainActionButton(
                 label = "排班",
                 subLabel = if (inQueue) (queueZoneName ?: "") else null,
@@ -1368,7 +1369,7 @@ private fun MainActionGrid(
             )
         }
         // row 1: 接單 | 休息
-        MainActionRow {
+        MainActionRow(modifier = Modifier.weight(1f)) {
             MainActionButton(
                 label = "接單",
                 isActive = currentStatus == DriverAvailability.AVAILABLE,
@@ -1385,7 +1386,7 @@ private fun MainActionGrid(
             )
         }
         // row 2: 訂單 | 收入
-        MainActionRow {
+        MainActionRow(modifier = Modifier.weight(1f)) {
             MainActionButton(
                 label = "訂單",
                 onClick = onClickOrders,
@@ -1398,7 +1399,7 @@ private fun MainActionGrid(
             )
         }
         // row 3: 我的 | 折扣
-        MainActionRow {
+        MainActionRow(modifier = Modifier.weight(1f)) {
             MainActionButton(
                 label = "我的",
                 onClick = onClickProfile,
@@ -1415,11 +1416,12 @@ private fun MainActionGrid(
 }
 
 @Composable
-private fun MainActionRow(content: @Composable RowScope.() -> Unit) {
+private fun MainActionRow(
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         content = content,
     )
@@ -1445,15 +1447,16 @@ private fun MainActionButton(
     activeColor: Color = ButtonActiveGreen,
     onClick: () -> Unit,
 ) {
+    // 按鈕高度從固定 110dp 變動態（4 row 均分剩餘空間，約 160-180dp），字級同步放大
     val mainFontSize = when {
-        subLabel2 != null -> 22.sp
-        subLabel != null -> 26.sp
-        else -> 32.sp
+        subLabel2 != null -> 28.sp
+        subLabel != null -> 32.sp
+        else -> 40.sp
     }
 
     Card(
         onClick = onClick,
-        modifier = modifier.height(110.dp),
+        modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isActive) activeColor else Color.White
@@ -1477,10 +1480,10 @@ private fun MainActionButton(
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (subLabel != null) {
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = subLabel,
-                        fontSize = if (subLabel2 != null) 18.sp else 16.sp,
+                        fontSize = if (subLabel2 != null) 22.sp else 20.sp,
                         fontWeight = FontWeight.Medium,
                         color = if (isActive) Color.White.copy(alpha = 0.92f) else SubText,
                         maxLines = 1,
@@ -1488,10 +1491,10 @@ private fun MainActionButton(
                     )
                 }
                 if (subLabel2 != null) {
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = subLabel2,
-                        fontSize = 22.sp,
+                        fontSize = 32.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (isActive) Color.White else DarkText,
                         maxLines = 1,
