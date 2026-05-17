@@ -51,6 +51,13 @@ data class HomeUiState(
     val queuedOrder: Order? = null,
     val isLoading: Boolean = false,
     val error: String? = null,
+    /**
+     * 已確認過目的地的 orderId 集合（in-memory）。
+     * confirmDestination() 只更新本地 Order.destinationConfirmed，後端沒對應欄位，
+     * 一旦 WebSocket / API 重推訂單就會把 destinationConfirmed 蓋回 false → 按鈕又跳出來。
+     * 用這個 set 作為 client-side override，UI 判斷 needsDestinationConfirmation 時排除。
+     */
+    val confirmedDestinationOrderIds: Set<String> = emptySet(),
     // 評分相關
     val pendingRating: PendingRating? = null,
     val isSubmittingRating: Boolean = false,
@@ -506,9 +513,10 @@ class HomeViewModel : ViewModel() {
                     )
                 )
 
-                // 更新本地訂單狀態
+                // 更新本地訂單狀態 + 加入「已確認 set」（避免 WebSocket 重推時 destinationConfirmed 被蓋回 false）
                 _uiState.value = _uiState.value.copy(
                     currentOrder = currentOrder.copy(destinationConfirmed = true),
+                    confirmedDestinationOrderIds = _uiState.value.confirmedDestinationOrderIds + orderId,
                     error = null
                 )
 

@@ -1,8 +1,9 @@
-GoGoCha v1.4.3 修車資輸入框文字色 bug：
+GoGoCha v1.4.4 修「確認目的地」按鈕重複跳出 bug：
 
-🐛 車資金額輸入框看不到文字
-   - 結算車資 dialog 的金額輸入框，dark mode 下文字色被系統主題覆蓋成淺色，跟白底撞色看不清楚
-   - 修正：強制白底 + 深字 (#212121)，不再被系統主題影響
-   - 同步加上 unfocused 狀態的 label/cursor 顏色設定
+🐛 電話訂單按過「確認目的地」後到達階段又跳出來
+   - 原因：confirmDestination 只更新本地 Order.destinationConfirmed
+     一旦 WebSocket 重推訂單，server 回的 false 蓋掉本地 true
+   - 修正：UiState 新增 confirmedDestinationOrderIds set 作 client-side override
+     UI 雙重檢查 (Order.flag + Set)，按一次永遠生效（直到 app 關閉）
 
 —— GoGoCha 花蓮計程車

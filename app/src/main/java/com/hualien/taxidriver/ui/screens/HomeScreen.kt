@@ -725,7 +725,11 @@ fun HomeScreen(
                         }
 
                         // 電話訂單：目的地確認按鈕
-                        if (currentOrder.needsDestinationConfirmation()) {
+                        // 雙重檢查：Order.destinationConfirmed（後端來的）+ UiState set（client-side override，
+                        // 後端目前沒持久化此欄位，WebSocket 重推會蓋掉本地 flag，所以用 set 兜底）
+                        if (currentOrder.needsDestinationConfirmation()
+                            && !uiState.confirmedDestinationOrderIds.contains(currentOrder.orderId)
+                        ) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
