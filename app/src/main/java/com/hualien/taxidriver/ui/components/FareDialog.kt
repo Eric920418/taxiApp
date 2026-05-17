@@ -139,7 +139,14 @@ fun FareDialog(
                     ),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color(0xFF4CAF50),
-                        focusedLabelColor = Color(0xFF4CAF50)
+                        focusedLabelColor = Color(0xFF4CAF50),
+                        // 強制白底 + 深字，避免 dark mode 下系統 onSurface 變淺色跟字撞色
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        focusedTextColor = Color(0xFF212121),
+                        unfocusedTextColor = Color(0xFF212121),
+                        cursorColor = Color(0xFF4CAF50),
+                        unfocusedLabelColor = Color(0xFF757575),
                     )
                 )
 
