@@ -1,9 +1,11 @@
-GoGoCha v1.4.4 修「確認目的地」按鈕重複跳出 bug：
+GoGoCha v1.4.5 確認目的地 bug v2 修法：
 
-🐛 電話訂單按過「確認目的地」後到達階段又跳出來
-   - 原因：confirmDestination 只更新本地 Order.destinationConfirmed
-     一旦 WebSocket 重推訂單，server 回的 false 蓋掉本地 true
-   - 修正：UiState 新增 confirmedDestinationOrderIds set 作 client-side override
-     UI 雙重檢查 (Order.flag + Set)，按一次永遠生效（直到 app 關閉）
+🐛 v1.4.4 修法沒生效 — 按完還是一直跳出來
+   - 原因：先呼叫 API 再更新 set，如果 API 拋（網路斷/auth/404）
+     try 流程斷掉，set 永遠加不進去 → WebSocket 重推時按鈕又跳
+   - 修正：樂觀更新模式
+     1. 先同步更新 UI + set（不可被 exception 阻斷）
+     2. API 背景送，失敗只 warn 不阻 UI
+   - 後端目前無對應持久化 endpoint，純前端兜底
 
 —— GoGoCha 花蓮計程車

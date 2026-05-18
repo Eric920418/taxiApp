@@ -485,26 +485,28 @@ class HomeViewModel : ViewModel() {
 
     /**
      * 確認電話訂單目的地
+     *
+     * v1.4.5 修法：先樂觀更新 UI/set，API 背景送。
+     * 原 bug：先呼叫 updateOrderStatus（不會持久化 destinationConfirmed），如果 API 拋
+     * (網路斷/auth/404)，try 流程斷掉，set 永遠加不進去，WebSocket 重推時又把按鈕跳出來。
+     * 後端目前沒有專屬「確認目的地」endpoint，這個 API call 純粹是 noop（用當前 status 重發），
+     * 所以拿掉 API 也不會影響後端狀態 — 但保留呼叫保兼容性，失敗只 warn 不阻 UI。
      */
     fun confirmDestination(orderId: String, confirmedAddress: String? = null) {
+        val currentOrder = _uiState.value.currentOrder ?: return
+        if (currentOrder.orderId != orderId) return
+
+        // 1. 立即樂觀更新 UI + set（同步、不可被 exception 阻斷）
+        _uiState.value = _uiState.value.copy(
+            currentOrder = currentOrder.copy(destinationConfirmed = true),
+            confirmedDestinationOrderIds = _uiState.value.confirmedDestinationOrderIds + orderId,
+            error = null
+        )
+        android.util.Log.d("HomeViewModel", "✅ 目的地已確認（本地）: $orderId")
+
+        // 2. 背景送 API（失敗只 warn，不影響 UI；後端目前無對應持久化 endpoint）
         viewModelScope.launch {
             try {
-                val currentOrder = _uiState.value.currentOrder ?: return@launch
-
-                val data = org.json.JSONObject().apply {
-                    put("orderId", orderId)
-                    put("driverId", currentDriverId ?: "")
-                    if (confirmedAddress != null) {
-                        put("confirmedAddress", confirmedAddress)
-                    }
-                    currentOrder.destination?.let { dest ->
-                        put("confirmedAddress", dest.address ?: "")
-                        put("confirmedLat", dest.latitude)
-                        put("confirmedLng", dest.longitude)
-                    }
-                }
-
-                // 呼叫 API 更新訂單狀態（目的地確認為本地狀態更新）
                 RetrofitClient.apiService.updateOrderStatus(
                     orderId,
                     com.hualien.taxidriver.data.remote.dto.UpdateOrderStatusRequest(
@@ -512,20 +514,8 @@ class HomeViewModel : ViewModel() {
                         driverId = currentDriverId
                     )
                 )
-
-                // 更新本地訂單狀態 + 加入「已確認 set」（避免 WebSocket 重推時 destinationConfirmed 被蓋回 false）
-                _uiState.value = _uiState.value.copy(
-                    currentOrder = currentOrder.copy(destinationConfirmed = true),
-                    confirmedDestinationOrderIds = _uiState.value.confirmedDestinationOrderIds + orderId,
-                    error = null
-                )
-
-                android.util.Log.d("HomeViewModel", "✅ 目的地已確認: $orderId")
             } catch (e: Exception) {
-                android.util.Log.e("HomeViewModel", "確認目的地失敗", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "確認目的地失敗: ${e.message}"
-                )
+                android.util.Log.w("HomeViewModel", "確認目的地 API 失敗（不阻 UI）", e)
             }
         }
     }
