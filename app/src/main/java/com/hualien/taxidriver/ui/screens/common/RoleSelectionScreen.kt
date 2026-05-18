@@ -1,146 +1,177 @@
 package com.hualien.taxidriver.ui.screens.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hualien.taxidriver.domain.model.UserRole
 
 /**
- * 角色選擇畫面
- * 用戶首次打開App時選擇身份（乘客或司機）
+ * 角色選擇畫面 — splash 風格（v1.4.6 改版）
+ *
+ * 主按鈕「登錄」進司機端，右下角車子 FAB 切乘客端。
+ * 內部仍走原本 RoleManager 路由：DRIVER → MainNavigation（含 Firebase SMS 驗證），
+ * PASSENGER → PassengerNavigation。
  */
 @Composable
 fun RoleSelectionScreen(
     onRoleSelected: (UserRole) -> Unit
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .background(Color(0xFFEFEFEF))
     ) {
-        // 添加頂部彈性空間，讓內容在大螢幕上置中
-        Spacer(modifier = Modifier.weight(1f, fill = false))
+        // 上半部：白色「下凸圓弧」底，置中 LOGO + 標語
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.62f)
+                .background(Color.White, shape = BottomArcShape(arcHeight = 64.dp))
+        ) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 32.dp)
+                    .padding(bottom = 64.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "GoGoCha",
+                    fontSize = 56.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color(0xFF111111),
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+                Text(
+                    text = "有溫度的操作服務",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color(0xFF666666),
+                    letterSpacing = 4.sp,
+                )
+            }
+        }
 
-        // 標題
-        Text(
-            text = "歡迎使用",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "GoGoCha",
-            fontSize = 36.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-            textAlign = TextAlign.Center
-        )
+        // 下半部：黃色「登錄」按鈕 + 說明文字
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 28.dp, vertical = 80.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Button(
+                onClick = { onRoleSelected(UserRole.DRIVER) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(68.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFFFB800),
+                    contentColor = Color.White,
+                ),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
+            ) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "登 錄",
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(28.dp),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = "點擊開始使用",
+                fontSize = 14.sp,
+                color = Color(0xFF888888),
+                letterSpacing = 1.sp,
+            )
+        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "請選擇您的身份",
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // 乘客卡片
-        RoleCard(
-            title = "我是乘客",
-            description = "快速叫車，安全便捷",
-            icon = Icons.Default.Person,
-            containerColor = Color(0xFF4CAF50),
-            onClick = { onRoleSelected(UserRole.PASSENGER) }
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // 司機卡片
-        RoleCard(
-            title = "我是司機",
-            description = "接單賺錢，靈活工作",
-            icon = Icons.Default.Star,
-            containerColor = Color(0xFF1976D2),
-            onClick = { onRoleSelected(UserRole.DRIVER) }
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "選擇後可在設定中切換身份",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        // 添加底部彈性空間，讓內容在大螢幕上置中
-        Spacer(modifier = Modifier.weight(1f, fill = false))
+        // 右下角浮動車子 icon → 切換到乘客模式
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 24.dp, bottom = 24.dp)
+                .size(56.dp)
+                .shadow(elevation = 6.dp, shape = CircleShape)
+                .background(Color.White, shape = CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            IconButton(
+                onClick = { onRoleSelected(UserRole.PASSENGER) },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DirectionsCar,
+                    contentDescription = "乘客模式",
+                    tint = Color(0xFF333333),
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+        }
     }
 }
 
 /**
- * 角色選擇卡片組件
+ * 自訂 Shape — 矩形底邊有「向下凸」的圓弧
+ *
+ * 用 quadraticTo 畫一條二次貝茲曲線：
+ *   - 起點：(width, height - arcHeight)
+ *   - 控制點：(width/2, height + arcHeight)  ← 把曲線「拉到」矩形底部以下，造成凸出視覺
+ *   - 終點：(0, height - arcHeight)
+ *
+ * 視覺等同上半圓形跟矩形的聯集，但僅用單一 Path 描述。
  */
-@Composable
-fun RoleCard(
-    title: String,
-    description: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    containerColor: Color,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 140.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = containerColor
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        onClick = onClick
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = title,
-                modifier = Modifier.size(48.dp),
-                tint = Color.White
+private class BottomArcShape(private val arcHeight: Dp) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density,
+    ): Outline {
+        val arcPx = with(density) { arcHeight.toPx() }
+        val path = Path().apply {
+            moveTo(0f, 0f)
+            lineTo(size.width, 0f)
+            lineTo(size.width, size.height - arcPx)
+            quadraticTo(
+                size.width / 2f, size.height + arcPx,
+                0f, size.height - arcPx,
             )
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.9f),
-                textAlign = TextAlign.Center
-            )
+            close()
         }
+        return Outline.Generic(path)
     }
 }
