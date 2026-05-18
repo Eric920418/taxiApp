@@ -27,11 +27,11 @@ import androidx.compose.ui.unit.sp
 import com.hualien.taxidriver.domain.model.UserRole
 
 /**
- * 角色選擇畫面 — splash 風格（v1.4.6 改版）
+ * 角色選擇畫面 — splash 風格（v1.4.6 改版、v1.4.8 主/副對調）
  *
- * 主按鈕「登錄」進司機端，右下角車子 FAB 切乘客端。
- * 內部仍走原本 RoleManager 路由：DRIVER → MainNavigation（含 Firebase SMS 驗證），
- * PASSENGER → PassengerNavigation。
+ * 主按鈕「登錄」預設進**乘客端**（大眾用戶），右下角車子 FAB 切**司機端**（少數）。
+ * 內部仍走原本 RoleManager 路由：PASSENGER → PassengerNavigation，
+ * DRIVER → MainNavigation（含 Firebase SMS 驗證）。
  */
 @Composable
 fun RoleSelectionScreen(
@@ -81,7 +81,7 @@ fun RoleSelectionScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Button(
-                onClick = { onRoleSelected(UserRole.DRIVER) },
+                onClick = { onRoleSelected(UserRole.PASSENGER) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(68.dp),
@@ -120,7 +120,7 @@ fun RoleSelectionScreen(
             )
         }
 
-        // 右下角浮動車子 icon → 切換到乘客模式
+        // 右下角浮動車子 icon → 切換到司機模式（主按鈕預設乘客，FAB 提供切換給少數司機用戶）
         Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -131,12 +131,12 @@ fun RoleSelectionScreen(
             contentAlignment = Alignment.Center,
         ) {
             IconButton(
-                onClick = { onRoleSelected(UserRole.PASSENGER) },
+                onClick = { onRoleSelected(UserRole.DRIVER) },
                 modifier = Modifier.fillMaxSize(),
             ) {
                 Icon(
                     imageVector = Icons.Default.DirectionsCar,
-                    contentDescription = "乘客模式",
+                    contentDescription = "司機模式",
                     tint = Color(0xFF333333),
                     modifier = Modifier.size(28.dp),
                 )
