@@ -7,4 +7,6 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!-- App icon adaptive icon background（白底襯托去背的彩色 logo） -->
+    <color name="ic_launcher_background">#FFFFFFFF</color>
 </resources>
