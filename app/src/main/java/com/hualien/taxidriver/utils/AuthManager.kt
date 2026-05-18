@@ -121,6 +121,17 @@ class AuthManager private constructor(
             }
             else -> Log.d(TAG, "reconcile: 狀態一致，無需動作")
         }
+
+        // 已認證的司機每次 App 啟動都主動推 FCM token 到 server（idempotent PATCH）
+        // 不依賴 Firebase onNewToken 因為它只在 token 真的變化時才觸發，
+        // 已配對好的 token 不會重發 → 害 server fcm_token 永遠是空 (今天 33 司機 0 token bug)
+        if (fbUser != null && role == UserRole.DRIVER && !cachedDriverId.isNullOrEmpty()) {
+            runCatching {
+                withTimeoutOrNull(FCM_CLEAR_TIMEOUT_MS) {
+                    FcmTokenManager.syncTokenAfterLogin(appContext, cachedDriverId)
+                }
+            }.onFailure { Log.e(TAG, "FCM sync 失敗 (不影響啟動)", it) }
+        }
     }
 
     /**
