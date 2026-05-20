@@ -1,9 +1,67 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.4.1（beta32）| 更新日期：2026-05-13
+> 版本：v1.4.1（beta32）| 更新日期：2026-05-16
 
-## 📝 最新更新（2026-05-13 二版）- 主畫面 8 按鈕去圖示化 + 排班三行顯示
+## 📝 最新更新（2026-05-16）— 結構性 bug 根治：Schema 強制 + Admin Health Banner
+
+### Context
+
+5/16 之前一天累積 5 種類別 admin / landmark 結構性 bug，user 提出「要 100% 準確」。
+
+由於應用層 100% 做不到（有 React state timing、antd quirks、SQL silent failure 等多種 vector），改用 **三層防護策略**，**最底層用 PostgreSQL trigger + partial unique index 達到 schema-level 100% 強制**。
+
+### Migration 023（DB schema 強制）
+
+`src/db/migrations/023-data-integrity-triggers.sql`：
+
+1. **Trigger** — landmark 軟刪時自動 `DELETE FROM landmark_aliases WHERE landmark_id = ...`
+   解決：5/12 之前的 20 個軟刪 landmark 殘留 aliases 害 user 加吉火 silent fail
+2. **Trigger** — partner 停用時 cascade 把 driver_partners 設 is_active=false
+3. **Partial unique** — `idx_landmarks_name_unique_active ON landmarks (name) WHERE deleted_at IS NULL`
+4. **Partial unique** — `idx_partners_name_unique_active ON partners (name) WHERE is_active = true`
+5. Phase 0：先清舊違規資料，再加 constraint（避免上 prod 直接炸）
+
+### Admin Health 中心（`/admin/health`）
+
+`src/api/admin-health.ts` + `admin-panel/src/pages/HealthCheck.tsx`：
+- 6 個 health check：orphan_aliases / duplicate_landmark_names / duplicate_partner_names / inactive_partner_active_bindings / stuck_offered_orders / stuck_queue_entries
+- 每個 check 有 severity (high/medium/low) + items 列表 + 一鍵清理按鈕（只對「殘留」類，業務異常需手動處理）
+- Admin sidebar 加「系統健康」menu，右上紅 Badge 顯示 high-severity count，每 5 分鐘 auto-refresh
+- `admin-panel/src/components/HealthBanner.tsx` 共用元件 — Landmarks / Partners / QueueZones 頁面頂部自動顯示跟該頁相關的異常 + 「前往清理」按鈕
+
+### Admin Form 反 pattern 與根治
+
+**禁用 4 條（review 新 admin code 必對照）**：
+
+1. ❌ `editing ? <Form.Item> : <Form.Item>`（conditional render）
+   - 案例：commit `12b9f4c` Partners.tsx editing/create modal 切換 → setFieldsValue 跑進「新建版」hidden Input，re-render 換成 disabled Input 時 value 沒同步 → user 看到空白
+   - ✅ 改用 `<Form.Item hidden={!editing} label={editing ? 'X' : undefined}>` 永遠 mount
+
+2. ❌ `Form.Item hidden + InputNumber + setFieldsValue` 接 derived state
+   - 案例：commit `994a5d9` Landmarks lat/lng 點地圖沒填入；同 pattern 也在 QueueZones / AddressFailures
+   - ✅ 用 `useState` (formLat, formLng) + handleSubmit 手動驗證 + 注入 payload
+
+3. ❌ `INSERT ... ON CONFLICT DO NOTHING` 在 user-facing endpoint
+   - 案例：commit `fffeb1c` 吉火 alias 連續 6 次寫不進去 silent fail
+   - ✅ Pre-check + throw 明確 error；admin-internal idempotent 場景才能用 DO NOTHING（如 phone-calls.ts webhook 重送）
+
+4. ❌ Soft delete 不清依賴資料
+   - 案例：id=7 軟刪後 5 個 alias 殘留 5 天
+   - ✅ DB trigger 自動清（migration 023 已上）；同時 application 層 health check 持續偵測舊殘留
+
+### Cache-Control no-store on `admin-panel/index.html`
+
+`admin-panel/index.html` 加 meta `<meta http-equiv="Cache-Control" content="no-store">`。Vite build 已對 `assets/*.js` 加 hash，但 `index.html` 本身 cache 會卡舊 bundle 引用，admin 之後普通 F5 就能拿到新版（不用 hard refresh）。
+
+### 影響檔案
+
+**Backend**：`023-data-integrity-triggers.sql` (新)、`migrate.ts`、`admin-health.ts` (新)、`index.ts`、`orders.ts` (auto re-queue 加 surface log)
+**Admin Panel**：`HealthCheck.tsx` (新)、`HealthBanner.tsx` (新)、`MainLayout.tsx` (sidebar badge)、`Landmarks/Partners/QueueZones.tsx` (頂部 banner)、`App.tsx` (路由)、`services/api.ts` (healthAPI)、`index.html` (no-store meta)
+
+---
+
+## 📝 歷史更新（2026-05-13 二版）- 主畫面 8 按鈕去圖示化 + 排班三行顯示
 
 ### 問題
 v1.4.0 的 8 按鈕配 Material Icon + 18sp 文字，user 反映「老人看不認得圖示，字也不夠大」。
