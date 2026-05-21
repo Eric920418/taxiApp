@@ -102,12 +102,32 @@ data class HomeUiState(
     val outsideQueueZone: Boolean? = null,
     /** 司機與所排班 zone 中心的距離（公尺），給 UI 顯示用 */
     val distanceToQueueZone: Int? = null,
+    /**
+     * 連續離區 check 次數。每次 refreshQueue 偵測到 outside 累加 1，回到 inside 歸 0。
+     * 達到閾值（2 = 60s 連續確認離區）→ 自動觸發 leaveQueue + 彈 dialog。
+     * 用「連續次數」避免 GPS 抖動的單次誤判。
+     */
+    val outsideZoneStreak: Int = 0,
+    /**
+     * 自動退出排班的一次性通知資訊。非 null 時 UI 顯示確認 dialog；
+     * 使用者按「我知道了」後 dismissAutoLeftDialog() 清掉。
+     */
+    val autoLeftZoneInfo: AutoLeftZoneInfo? = null,
     val queueLoading: Boolean = false,
 
     // === GoGoCha 抽成接受度（司機願意被平台抽最高 N%）===
     val maxAcceptableDiscountAmount: Int = 0,
     val fleetPartnerName: String? = null,
     val fleetDefaultDiscountAmount: Int? = null
+)
+
+/**
+ * 司機被自動退出排班時的通知資訊。
+ * UI 觀察此 state 顯示一次性 AlertDialog 給司機看，司機按確認後 dismissAutoLeftDialog 清掉。
+ */
+data class AutoLeftZoneInfo(
+    val zoneName: String,
+    val distanceMeters: Int,
 )
 
 /**
@@ -424,22 +444,69 @@ class HomeViewModel : ViewModel() {
                 // 觸發 outside 警示的情境：admin 改 zone 中心/半徑、司機自己離開區域沒退出
                 var outside: Boolean? = null
                 var distance: Int? = null
+                var myZoneName: String? = null
                 if (myStatus?.inQueue == true && currentLat != null && currentLng != null) {
                     val myZone = zones.firstOrNull { it.zoneId == myStatus.zoneId }
                     if (myZone != null) {
                         val d = haversineMeters(currentLat, currentLng, myZone.centerLat, myZone.centerLng)
                         distance = d.toInt()
                         outside = d > myZone.radiusMeters
+                        myZoneName = myZone.name
                     }
                 }
+
+                // 連續離區計數：outside=true 累加、false 歸 0、null（沒在排班 / 沒 GPS）不動
+                val prevStreak = _uiState.value.outsideZoneStreak
+                val newStreak = when (outside) {
+                    true -> prevStreak + 1
+                    false -> 0
+                    null -> prevStreak
+                }
+
+                // 達到閾值 → 自動退出排班 + 觸發 dialog 通知
+                // 閾值 = 2 表示連續 2 次 check 都離區（poll 間隔 30s → 約 60s 確認）
+                // 避免 GPS 單次抖動把司機踢出
+                val AUTO_LEAVE_THRESHOLD = 2
+                val shouldAutoLeave = newStreak >= AUTO_LEAVE_THRESHOLD &&
+                    myStatus?.inQueue == true &&
+                    myZoneName != null &&
+                    distance != null
 
                 _uiState.value = _uiState.value.copy(
                     queueZones = zones,
                     myQueueStatus = myStatus,
                     outsideQueueZone = outside,
                     distanceToQueueZone = distance,
+                    outsideZoneStreak = newStreak,
                     queueLoading = false,
                 )
+
+                if (shouldAutoLeave) {
+                    android.util.Log.w(
+                        "HomeViewModel",
+                        "司機連續 ${newStreak} 次離區（距 ${distance}m），自動退出排班 zone=${myZoneName}"
+                    )
+                    // 先標記 autoLeftZoneInfo 給 UI 彈 dialog（用樂觀更新模式，不等 API）
+                    _uiState.value = _uiState.value.copy(
+                        autoLeftZoneInfo = AutoLeftZoneInfo(
+                            zoneName = myZoneName!!,
+                            distanceMeters = distance!!,
+                        ),
+                        outsideZoneStreak = 0,
+                    )
+                    // 背景送 leave API
+                    driverId?.let { id ->
+                        viewModelScope.launch {
+                            try {
+                                queueRepository.leaveQueue(id, reason = "AUTO_OUT_OF_ZONE")
+                                // 重抓 queue 狀態（不帶 GPS、純更新 inQueue=false）
+                                refreshQueue()
+                            } catch (e: Exception) {
+                                android.util.Log.w("HomeViewModel", "自動退出排班 API 失敗（不阻 UI）", e)
+                            }
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(queueLoading = false)
                 android.util.Log.w("HomeViewModel", "排班載入失敗：${e.message}")
@@ -1200,6 +1267,13 @@ class HomeViewModel : ViewModel() {
      */
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    /**
+     * 司機按掉「自動退出排班」通知 dialog。清掉 autoLeftZoneInfo 讓 UI 收起。
+     */
+    fun dismissAutoLeftDialog() {
+        _uiState.value = _uiState.value.copy(autoLeftZoneInfo = null)
     }
 
     private fun mergeQueuedOrderMetadata(updatedOrder: Order, originalOrder: Order?): Order {

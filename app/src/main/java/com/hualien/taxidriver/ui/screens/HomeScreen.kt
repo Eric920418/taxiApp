@@ -1225,6 +1225,15 @@ fun HomeScreen(
                 onDismiss = { showLogoutDialog = false },
             )
         }
+
+        // ====== 自動離區退出通知（連續 2 次 GPS 確認離區後 ViewModel 自動 leave + 觸發此 dialog）======
+        uiState.autoLeftZoneInfo?.let { info ->
+            AutoLeftZoneDialog(
+                zoneName = info.zoneName,
+                distanceMeters = info.distanceMeters,
+                onDismiss = { viewModel.dismissAutoLeftDialog() },
+            )
+        }
     }
 }
 
@@ -1543,6 +1552,43 @@ private fun MainActionButton(
             }
         }
     }
+}
+
+/**
+ * 自動離區退出排班通知對話框。
+ * 觸發：HomeViewModel.refreshQueue 偵測到司機連續 2 次 GPS 在 zone 外（約 60s 確認），
+ *       自動呼叫 leaveQueue + set autoLeftZoneInfo → UI 彈這個 dialog 通知司機。
+ */
+@Composable
+private fun AutoLeftZoneDialog(
+    zoneName: String,
+    distanceMeters: Int,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("⚠ 已自動退出排班", fontWeight = FontWeight.Bold, fontSize = 22.sp, color = Color(0xFFE65100))
+        },
+        text = {
+            Column {
+                Text("您已離開「${zoneName}」排班區", fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("距離區域中心 ${distanceMeters} 公尺", fontSize = 16.sp, color = Color(0xFF666666))
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "系統已自動將您退出排班，可回到區內手動重新加入。",
+                    fontSize = 14.sp,
+                    color = Color(0xFF555555),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("我知道了", color = Color(0xFFE65100), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    )
 }
 
 /**

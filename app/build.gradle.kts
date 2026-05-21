@@ -36,8 +36,8 @@ android {
         applicationId = "com.hualien.taxidriver"
         minSdk = 26
         targetSdk = 36
-        versionCode = 41
-        versionName = "1.4.9"
+        versionCode = 42
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
