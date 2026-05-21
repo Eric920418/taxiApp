@@ -93,6 +93,15 @@ data class HomeUiState(
     // === 排班（Queue）===
     val queueZones: List<com.hualien.taxidriver.domain.model.QueueZone> = emptyList(),
     val myQueueStatus: com.hualien.taxidriver.domain.model.QueueMyStatus? = null,
+    /**
+     * 司機目前是否「物理上不在」所排班的 zone 範圍內。
+     * 觸發情境：admin 移動 zone 中心點 / 半徑、司機自己離開區域但沒退出排班。
+     * 由 refreshQueue() 拿 GPS 跟 zone.centerLat/Lng 算 Haversine 距離 > radius_meters 時設 true。
+     * null = 還沒檢查過（沒 GPS / 不在排班中）
+     */
+    val outsideQueueZone: Boolean? = null,
+    /** 司機與所排班 zone 中心的距離（公尺），給 UI 顯示用 */
+    val distanceToQueueZone: Int? = null,
     val queueLoading: Boolean = false,
 
     // === GoGoCha 抽成接受度（司機願意被平台抽最高 N%）===
@@ -399,7 +408,7 @@ class HomeViewModel : ViewModel() {
      * 載入排班區列表 + 司機自己的排班狀態
      * 呼叫時機：HomeScreen LaunchedEffect、加入/退出排班後
      */
-    fun refreshQueue() {
+    fun refreshQueue(currentLat: Double? = null, currentLng: Double? = null) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(queueLoading = true)
             val driverId = currentDriverId
@@ -411,9 +420,24 @@ class HomeViewModel : ViewModel() {
                     queueRepository.getMyStatus(driverId).getOrNull()
                 } else null
 
+                // GPS 校驗：如果司機在排班中、有 GPS、且能找到對應 zone → 算 Haversine 距離
+                // 觸發 outside 警示的情境：admin 改 zone 中心/半徑、司機自己離開區域沒退出
+                var outside: Boolean? = null
+                var distance: Int? = null
+                if (myStatus?.inQueue == true && currentLat != null && currentLng != null) {
+                    val myZone = zones.firstOrNull { it.zoneId == myStatus.zoneId }
+                    if (myZone != null) {
+                        val d = haversineMeters(currentLat, currentLng, myZone.centerLat, myZone.centerLng)
+                        distance = d.toInt()
+                        outside = d > myZone.radiusMeters
+                    }
+                }
+
                 _uiState.value = _uiState.value.copy(
                     queueZones = zones,
                     myQueueStatus = myStatus,
+                    outsideQueueZone = outside,
+                    distanceToQueueZone = distance,
                     queueLoading = false,
                 )
             } catch (e: Exception) {
@@ -421,6 +445,20 @@ class HomeViewModel : ViewModel() {
                 android.util.Log.w("HomeViewModel", "排班載入失敗：${e.message}")
             }
         }
+    }
+
+    /**
+     * Haversine 公式算地表兩點距離（公尺）。跟後端 queue.ts distanceMeters() 同邏輯。
+     */
+    private fun haversineMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
+        val R = 6371000.0
+        val toRad = { deg: Double -> deg * Math.PI / 180.0 }
+        val dLat = toRad(lat2 - lat1)
+        val dLng = toRad(lng2 - lng1)
+        val a = Math.sin(dLat / 2).let { it * it } +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                Math.sin(dLng / 2).let { it * it }
+        return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
     }
 
     /**

@@ -53,7 +53,9 @@ import com.hualien.taxidriver.ui.components.OrderTagRow
 import com.hualien.taxidriver.ui.components.VoiceChatPanel
 import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import com.hualien.taxidriver.viewmodel.PhoneReviewViewModel
 
 // ====== 新 UI 顏色定義 ======
@@ -151,6 +153,26 @@ fun HomeScreen(
     LaunchedEffect(driverId) {
         phoneReviewVm.loadReviewCount(driverId)
         viewModel.refreshQueue()  // 載入排班區 + 自己的排班狀態
+    }
+
+    // 排班中時：每 30 秒重新拉一次 server 最新 zone 資料 + 用 GPS 校驗是否仍在區域內
+    // 觸發情境：admin 改 zone 中心點/半徑/名稱、司機自己離開區域沒退出
+    // inQueue 變 false（自己退出 / server cron 踢出）時自動停止 polling
+    LaunchedEffect(uiState.myQueueStatus?.inQueue) {
+        if (uiState.myQueueStatus?.inQueue == true) {
+            val fused = com.google.android.gms.location.LocationServices
+                .getFusedLocationProviderClient(context)
+            while (true) {
+                delay(30_000L)
+                try {
+                    @Suppress("MissingPermission")
+                    val loc = fused.lastLocation.await()
+                    viewModel.refreshQueue(loc?.latitude, loc?.longitude)
+                } catch (e: SecurityException) {
+                    viewModel.refreshQueue()  // 沒權限就純抓 server 資料、不算距離
+                }
+            }
+        }
     }
 
     // 語音對講狀態
@@ -364,6 +386,8 @@ fun HomeScreen(
                     queueZoneName = uiState.myQueueStatus?.zoneName,
                     queuePosition = uiState.myQueueStatus?.position,
                     inQueue = uiState.myQueueStatus?.inQueue == true,
+                    outsideQueueZone = uiState.outsideQueueZone == true,
+                    distanceToQueueZone = uiState.distanceToQueueZone,
                     discountAmount = uiState.maxAcceptableDiscountAmount,
                     fleetPartnerName = uiState.fleetPartnerName,
                     fleetDefaultDiscountAmount = uiState.fleetDefaultDiscountAmount,
@@ -1335,6 +1359,8 @@ private fun MainActionGrid(
     queueZoneName: String?,
     queuePosition: Int?,
     inQueue: Boolean,
+    outsideQueueZone: Boolean = false,
+    distanceToQueueZone: Int? = null,
     discountAmount: Int,
     fleetPartnerName: String?,
     fleetDefaultDiscountAmount: Int?,
@@ -1356,11 +1382,21 @@ private fun MainActionGrid(
         // 4 row 用 ColumnScope.weight(1f) 平均分剩餘垂直空間，按鈕高度自動撐到最大
         // row 0: 排班 | 離線
         MainActionRow(modifier = Modifier.weight(1f)) {
+            // 排班按鈕：在隊伍中 + 離開區域 → 橘色警告 + 顯示距離；在隊伍中 → 綠色 + 順位；未加入 → 白底
             MainActionButton(
                 label = "排班",
-                subLabel = if (inQueue) (queueZoneName ?: "") else null,
-                subLabel2 = if (inQueue) "#${queuePosition ?: "-"}" else null,
+                subLabel = when {
+                    inQueue && outsideQueueZone -> "⚠ 已離開區域"
+                    inQueue -> queueZoneName ?: ""
+                    else -> null
+                },
+                subLabel2 = when {
+                    inQueue && outsideQueueZone && distanceToQueueZone != null -> "距${distanceToQueueZone}m"
+                    inQueue -> "#${queuePosition ?: "-"}"
+                    else -> null
+                },
                 isActive = inQueue,
+                activeColor = if (outsideQueueZone) StatusOrange else ButtonActiveGreen,
                 onClick = onClickQueue,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
