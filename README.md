@@ -1,9 +1,53 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.5.1（beta43）| 更新日期：2026-05-25
+> 版本：v1.5.2（beta44）| 更新日期：2026-05-25
 
-## 📝 最新更新（2026-05-25）— 找不到客人時一鍵聯絡（APP / LINE / 電話 三通道）
+## 📝 最新更新（2026-05-25 二版）— FareDialog 換自製大數字鍵盤
+
+### 問題
+
+確認車資對話框原本用 `OutlinedTextField + KeyboardType.Number` 叫起 Android 系統小鍵盤：
+- 系統鍵盤位置會擋畫面，老人在小螢幕上看不到「送出」按鈕
+- 系統鍵盤字級跟版面不一致（小、淺色），跟整個老人友善 UI 衝突
+- IME insets 動畫卡頓，dialog 開啟瞬間 layout 跳動
+
+### 解法：自製 3×4 calculator 鍵盤 + 暗色 dialog
+
+- `FareDialog.kt` 完整重寫，棄用系統鍵盤
+- 數字 1-9 + 清除 C + 0 + 退格 ⌫，全按鍵 64dp 高，老人手指好按
+- 金額用 `Box` + `Text` 顯示（不可編輯），`$` 綠色 36sp、數字 44sp 白色靠右
+- 暗色背景 `#1C1C1E` + 數字鍵深灰 `#3A3A3C`，contrast 比白底深字高很多
+- 「清除/退格」用淺底 `#E8E8EA` + 藍字 hierarchy 區分操作鍵 vs 數字鍵
+- 「送出」綠色 60dp、「取消」白底藍字 60dp 大按鈕
+
+### 關鍵 UX 細節
+
+**「第一次按鍵清空預填值」狀態機**：
+- 系統有預估金額時自動帶入（如 200），司機按送出即可
+- 司機若要改：原本系統鍵盤靠 `TextRange(0, len)` 全選讓新輸入覆蓋
+- 自製鍵盤沒有 cursor selection → 用 `isFirstInput` flag：首次按任意數字 → 清空 + 用新值取代，按「送出」前未動則維持預填值
+
+避免「預估 200 + 司機按 1 = 變 2001」這個原本系統鍵盤無此 bug 但自製鍵盤天然會有的隱性問題。
+
+### 影響檔案
+
+- `app/src/main/java/com/hualien/taxidriver/ui/components/FareDialog.kt`（重寫，~280 行）
+  - 移除 `OutlinedTextField` / `FocusRequester` / `LocalSoftwareKeyboardController` / `TextFieldValue` / `TextRange`
+  - 新增 `NumericKeypad` / `DigitKey` / `ActionKey` 三個 private composable
+- `app/build.gradle.kts` — bump v1.5.2 / beta44
+- `app/src/main/play/release-notes/zh-TW/default.txt` — 改寫
+
+### 設計取捨
+
+| 取捨 | 選擇 | 原因 |
+|---|---|---|
+| 暗色 vs 淺色 dialog | 暗色 | calculator 鍵盤暗底 contrast 比淺底高、夜間開車更柔和 |
+| 保留低速駐車費 + 愛心卡明細 | 保留 | 業務邏輯不能丟，包進 verticalScroll 防小螢幕爆版 |
+| 數字鍵字級 | 30sp | 比 v1.4 的 26sp 大 4sp、跟取消/送出按鈕 22-24sp 形成階梯 |
+| 是否支援長按退格 = 連續刪 | 否 | 老人不會用長按手勢、3 位數車資按 3 次也快 |
+
+## 📝 歷史更新（2026-05-25）— 找不到客人時一鍵聯絡（APP / LINE / 電話 三通道）
 
 ### Context
 
