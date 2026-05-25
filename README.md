@@ -1,9 +1,60 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.4.1（beta32）| 更新日期：2026-05-16
+> 版本：v1.5.1（beta43）| 更新日期：2026-05-25
 
-## 📝 最新更新（2026-05-16）— 結構性 bug 根治：Schema 強制 + Admin Health Banner
+## 📝 最新更新（2026-05-25）— 找不到客人時一鍵聯絡（APP / LINE / 電話 三通道）
+
+### Context
+
+司機抵達上車點後找不到人是叫車最常見的痛點。三種訂單來源（source）原本要靠司機自己切換工具：
+- **APP 客人**：要打開乘客端訊息對話（但司機端沒對應 UI）
+- **LINE 客人**：要查 LINE 後台 / 沒有自動推播管道
+- **電話客人**：要手動翻訂單看電話號碼再打開撥號鍵
+
+→ 統一成一個按鈕 + 4 顆快捷話術，後端依 source 自動分派。
+
+### 三階段實作
+
+**Phase 1（v1.4.x 前置）**：DRIVER_ARRIVED 狀態 server 自動推 SMS / LINE 給客人，內容嵌入司機電話讓客人可回撥。
+
+**Phase 2（後端 endpoint）** — `POST /api/orders/:orderId/contact-passenger`
+- 驗 driver 擁有此單，依 `order.source` 路由：
+  - `PHONE` → 回 `{ channel: 'TEL', passengerPhone }`，client 用 `Intent.ACTION_DIAL` 撥號
+  - `LINE` → `LineNotifier.pushTextMessage(lineUserId, message)` 推一則文字
+  - `APP`  → socket emit `passenger:driver_message`；若 passenger socket 離線 → fallback 回 `passengerPhone` 給 client 撥電話
+- 4 種 preset：`arrived` / `where_are_you` / `pick_up_phone` / `custom`
+
+**Phase 3（Android driver app v1.5.1）**：
+- ARRIVED 訂單卡新增「📞 聯絡客人」大藍按鈕（位於「開始行程」下方）
+- 按下開 AlertDialog，4 顆快捷話術 + 自由輸入文字欄
+- `HomeViewModel.contactPassenger()` 用 callback 把 dial intent + Toast 結果交回 UI 層（MVVM 不依賴 Context）
+- 後端回 `TEL` 或 `passengerPhone != null` → 自動帶起系統撥號介面（`Intent.ACTION_DIAL` + `tel:` URI，不需 CALL_PHONE permission）
+
+### 影響檔案
+
+**後端（已部署）**：
+- `src/api/orders.ts` — 新 endpoint `POST /:orderId/contact-passenger`
+- `src/services/LineNotifier.ts` — 新 method `pushTextMessage(lineUserId, text)`
+- `src/services/LineFlexTemplates.ts` — `driverArrivedCard` 加司機電話 row
+- `src/services/CustomerNotificationService.ts` — DRIVER_ARRIVED SMS 模板嵌入司機電話
+
+**Android driver app（v1.5.1 / beta43）**：
+- `data/remote/dto/ContactPassengerDto.kt`（新）
+- `data/remote/ApiService.kt` — `contactPassenger()` Retrofit method
+- `data/repository/OrderRepository.kt` — `contactPassenger()`
+- `viewmodel/HomeViewModel.kt` — `contactPassenger(orderId, driverId, message, preset, onResult, onShouldDial)`
+- `ui/screens/HomeScreen.kt` — ARRIVED 按鈕 + `ContactPassengerDialog` composable
+
+### 設計取捨
+
+| 取捨 | 選擇 | 原因 |
+|---|---|---|
+| 是否要 CALL_PHONE 權限直接撥 | 否，用 `ACTION_DIAL` | 不需權限、帶起撥號介面讓司機確認、Play 審核風險低 |
+| 是否在 ViewModel 直接 `context.startActivity` | 否，用 callback 回 UI | MVVM 切分，ViewModel 不耦合 Android framework |
+| APP 客人離線怎辦 | 後端 fallback 帶 `passengerPhone` 給 client 撥電話 | 不漏接、不需 client 再多打一次 API |
+
+## 📝 歷史更新（2026-05-16）— 結構性 bug 根治：Schema 強制 + Admin Health Banner
 
 ### Context
 

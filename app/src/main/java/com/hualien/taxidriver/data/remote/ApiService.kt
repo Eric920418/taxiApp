@@ -158,6 +158,16 @@ interface ApiService {
         @Body request: RequestRelocationRequest
     ): Response<Unit>
 
+    /**
+     * 司機聯絡客人（找不到人時用）
+     * 依 order.source 自動路由：APP→socket / LINE→Bot push / PHONE→回電話讓 App 撥號
+     */
+    @POST("orders/{orderId}/contact-passenger")
+    suspend fun contactPassenger(
+        @Path("orderId") orderId: String,
+        @Body request: ContactPassengerRequest
+    ): Response<ContactPassengerResponse>
+
     // ==================== 排班 (Queue) ====================
 
     @GET("queue/zones")

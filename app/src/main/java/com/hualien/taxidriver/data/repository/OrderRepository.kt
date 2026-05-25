@@ -113,6 +113,37 @@ class OrderRepository {
     }
 
     /**
+     * 司機聯絡客人 — 依 source 自動分派通道
+     * 回完整 response 給 UI 判斷 (channel='TEL' / passengerPhone != null → Intent.DIAL)
+     */
+    suspend fun contactPassenger(
+        orderId: String,
+        driverId: String,
+        message: String,
+        preset: String? = null,
+    ): Result<com.hualien.taxidriver.data.remote.dto.ContactPassengerResponse> {
+        return try {
+            val response = apiService.contactPassenger(
+                orderId = orderId,
+                request = com.hualien.taxidriver.data.remote.dto.ContactPassengerRequest(
+                    driverId = driverId,
+                    message = message,
+                    preset = preset,
+                )
+            )
+            // 即使 HTTP 422 (APP 離線 fallback) 也要拿到 body 處理 passengerPhone
+            val body = response.body()
+            if (body != null) {
+                Result.success(body)
+            } else {
+                Result.failure(Exception("聯絡客人失敗：${response.code()} ${response.message()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("網路錯誤：${e.message}"))
+        }
+    }
+
+    /**
      * 客人未到：取消訂單並記錄 no-show
      */
     suspend fun cancelNoShow(

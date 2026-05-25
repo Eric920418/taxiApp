@@ -1039,6 +1039,53 @@ class HomeViewModel : ViewModel() {
     }
 
     /**
+     * 聯絡客人 — 後端依 order.source 自動路由 APP / LINE / PHONE 通道
+     *
+     * - channel='TEL' 或 passengerPhone != null（APP 離線 fallback）→ onShouldDial 給 UI 撥號
+     * - channel='APP' / 'LINE' 成功 → onResult(true, "已透過 X 通知客人")
+     * - 失敗 → onResult(false, errMsg)
+     *
+     * 設計用 callback 是因為撥電話、Toast 都是 UI 層的事，ViewModel 不該碰 Context/Intent。
+     */
+    fun contactPassenger(
+        orderId: String,
+        driverId: String,
+        message: String,
+        preset: String?,
+        onResult: (success: Boolean, info: String) -> Unit,
+        onShouldDial: (phone: String) -> Unit,
+    ) {
+        viewModelScope.launch {
+            repository.contactPassenger(orderId, driverId, message, preset)
+                .onSuccess { resp ->
+                    val phone = resp.passengerPhone
+                    if (resp.success && !phone.isNullOrBlank() && (resp.channel == "TEL" || resp.channel == null)) {
+                        onShouldDial(phone)
+                        onResult(true, "客人沒有 App / LINE，請直接撥打電話")
+                    } else if (resp.success) {
+                        val ch = when (resp.channel) {
+                            "APP" -> "App"
+                            "LINE" -> "LINE"
+                            else -> "通知"
+                        }
+                        onResult(true, "已透過 $ch 通知客人")
+                    } else {
+                        // 後端回 success=false 但給了 passengerPhone（APP 離線 fallback）
+                        if (!phone.isNullOrBlank()) {
+                            onShouldDial(phone)
+                            onResult(true, resp.message ?: "客人離線，請直接撥打電話")
+                        } else {
+                            onResult(false, resp.error ?: resp.message ?: "聯絡失敗")
+                        }
+                    }
+                }
+                .onFailure { err ->
+                    onResult(false, err.message ?: "聯絡客人失敗")
+                }
+        }
+    }
+
+    /**
      * 更新訂單狀態 - 開始行程
      * 啟動 SlowTrafficTimer，行程中累計速度 < 5 km/h 的秒數
      * Phase C+1a：傳 orderId 給 timer，每 5 秒持久化到 DataStore

@@ -142,6 +142,8 @@ fun HomeScreen(
     // v1.3.0：sheet / dialog state — 主畫面 8 按鈕觸發
     var showQueueSheet by remember { mutableStateOf(false) }
     var showDiscountSheet by remember { mutableStateOf(false) }
+    // v1.5.1：聯絡客人 dialog（ARRIVED 找不到人時用）
+    var showContactPassengerDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
     val queueSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val discountSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1009,7 +1011,7 @@ fun HomeScreen(
                                     }
                                 }
                             } else {
-                                // ===== 正常 ARRIVED：主按鈕「開始行程」+ 次按鈕「客人未到」=====
+                                // ===== 正常 ARRIVED：主按鈕「開始行程」+ 「📞 聯絡客人」+ 「客人未到」 =====
                                 Button(
                                     onClick = { viewModel.startTrip(currentOrder.orderId) },
                                     modifier = Modifier.fillMaxWidth().height(80.dp),
@@ -1018,6 +1020,23 @@ fun HomeScreen(
                                     shape = RoundedCornerShape(14.dp)
                                 ) {
                                     Text("開始行程", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Button(
+                                    onClick = { showContactPassengerDialog = true },
+                                    modifier = Modifier.fillMaxWidth().height(72.dp),
+                                    enabled = !uiState.isLoading,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        "📞 聯絡客人",
+                                        fontSize = 22.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
                                 }
 
                                 Spacer(modifier = Modifier.height(12.dp))
@@ -1233,6 +1252,37 @@ fun HomeScreen(
                 distanceMeters = info.distanceMeters,
                 onDismiss = { viewModel.dismissAutoLeftDialog() },
             )
+        }
+
+        // ====== 聯絡客人 dialog（ARRIVED 時找不到人按「📞 聯絡客人」觸發）======
+        if (showContactPassengerDialog) {
+            uiState.currentOrder?.let { order ->
+                ContactPassengerDialog(
+                    onDismiss = { showContactPassengerDialog = false },
+                    onSend = { message, preset ->
+                        viewModel.contactPassenger(
+                            orderId = order.orderId,
+                            driverId = driverId,
+                            message = message,
+                            preset = preset,
+                            onResult = { _, info ->
+                                Toast.makeText(context, info, Toast.LENGTH_LONG).show()
+                            },
+                            onShouldDial = { phone ->
+                                try {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "無法撥號：${e.message}", Toast.LENGTH_LONG).show()
+                                }
+                            },
+                        )
+                        showContactPassengerDialog = false
+                    },
+                )
+            }
         }
     }
 }
@@ -1922,4 +1972,93 @@ private fun ShiftStatusBanner(shifts: List<com.hualien.taxidriver.domain.model.S
             )
         }
     }
+}
+
+/**
+ * 聯絡客人 dialog — ARRIVED 時找不到人用
+ *
+ * 4 顆快捷話術 + 自由輸入。送出後由 ViewModel 走 /contact-passenger，
+ * 後端依 order.source 自動路由 APP / LINE / PHONE。
+ */
+@Composable
+private fun ContactPassengerDialog(
+    onDismiss: () -> Unit,
+    onSend: (message: String, preset: String?) -> Unit,
+) {
+    var customMessage by remember { mutableStateOf("") }
+
+    val presets = listOf(
+        Triple("arrived", "我已抵達上車點", "我已經到了，請您出來搭車"),
+        Triple("where_are_you", "請問您在哪？", "我在約定地點看不到您，請問您現在在哪裡？"),
+        Triple("pick_up_phone", "請接電話", "我有事情要跟您確認，請接一下電話"),
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "📞 聯絡客人",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "選擇快捷訊息，會自動依客人來源（App / LINE / 電話）發送：",
+                    fontSize = 14.sp,
+                    color = SubText
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                presets.forEach { (preset, label, fullMessage) ->
+                    Button(
+                        onClick = { onSend(fullMessage, preset) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .height(60.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(label, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "或自由輸入：",
+                    fontSize = 14.sp,
+                    color = SubText
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = customMessage,
+                    onValueChange = { customMessage = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("輸入要傳給客人的訊息…") },
+                    maxLines = 3
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        val msg = customMessage.trim()
+                        if (msg.isNotEmpty()) onSend(msg, "custom")
+                    },
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    enabled = customMessage.trim().isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF388E3C)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("送出自訂訊息", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", fontSize = 16.sp)
+            }
+        }
+    )
 }
