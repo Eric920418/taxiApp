@@ -1,9 +1,44 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.5.2（beta44）| 更新日期：2026-05-25
+> 版本：v1.6.0（beta45）| 更新日期：2026-05-27
 
-## 📝 最新更新（2026-05-25 二版）— FareDialog 換自製大數字鍵盤
+## 📝 最新更新（2026-05-27）— 模組 4：司機「立即取消」強制拍照存證
+
+### Context
+
+「長輩 LINE 叫車 roadmap」模組 4 落地（決策 2026-05-26：不做補償費、純拍照存證）。司機按下 ARRIVED 「客人未到？開始等候」倒數中再按「立即取消」時，系統強制喚醒相機要求拍照（家門口 / 醫院門牌存證），照片上傳成功後才真正執行 cancelNoShow API。倒數 5 分鐘自動取消的 path 保留 v1.5.1 legacy 行為、不強制拍照（避免司機沒看手機卡住）。
+
+### 後端（已部署 Lightsail）
+
+- **Migration 028** `no_show_evidence` table：order_id / driver_id / photo_url / gps_lat / gps_lng / waited_minutes / notes / captured_at
+- **POST `/api/orders/:orderId/no-show-evidence`** — multipart/form-data upload
+  - multer disk storage 寫到 `public/uploads/no_show/{orderId}-{ts}.jpg`，5MB cap
+  - 驗 ownership + `order.status === 'ARRIVED'`
+  - 失敗時自動清掉上傳檔避免堆積
+- **Static serve `/uploads/*`** — 7 天 cache，未來模組 5 SOS Flex card 也走這條
+
+### Android Driver App (v1.6.0)
+
+- `OrderRepository.uploadNoShowEvidence()` — multipart Retrofit call
+- `HomeViewModel`：
+  - `cancelNoShowNow()` 改成只設 `pendingNoShowEvidence` state（不打 API）
+  - `uploadEvidenceAndCancel(file, lat, lng)` two-step：先上傳照片 → 成功才打 cancelNoShow
+  - `dismissNoShowEvidence()` 取消整個流程
+- `HomeScreen`：`pendingNoShowEvidence != null` → 全屏覆蓋 `CameraCapture` 元件
+  - Upload loading overlay + 錯誤訊息（拍照可重來）
+  - 自動抓 lastLocation GPS 附在 multipart
+
+### 設計取捨
+
+| 取捨 | 選擇 | 原因 |
+|---|---|---|
+| 倒數 5 min 自動取消是否強制拍照 | 否 | 司機可能沒看手機；不擋客戶體驗 |
+| 「立即取消」是否強制拍照 | 是 | 主動取消 = 已注意到手機，能拍照 |
+| 上傳失敗怎麼辦 | 留 state 讓司機重試 | 不會「半拍半未拍」破壞資料一致性 |
+| 補償費 wallet | 不做（決策 2026-05-26）| 業務面未決定錢來源；schema 暫不建 |
+
+## 📝 歷史更新（2026-05-25 二版）— FareDialog 換自製大數字鍵盤
 
 ### 問題
 

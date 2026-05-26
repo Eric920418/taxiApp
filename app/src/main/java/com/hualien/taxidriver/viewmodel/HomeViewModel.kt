@@ -87,6 +87,13 @@ data class HomeUiState(
     val noShowRemainingSeconds: Int? = null,      // 剩餘秒數（給 UI 顯示）
     val noShowCancelling: Boolean = false,        // 正在送取消 API（避免重複送）
 
+    // === 模組 4：no-show 拍照存證 ===
+    // 司機按「立即取消」後 → 設此 state → UI 跳全屏 CameraCapture → 拍完上傳 → 才執行 cancelNoShow
+    // null = 不在拍照流程；非 null = 正在拍照 / 上傳
+    val pendingNoShowEvidence: PendingNoShowCancel? = null,
+    val noShowEvidenceUploading: Boolean = false,
+    val noShowEvidenceError: String? = null,
+
     // === 班次設定（從後端拉，用於顯示「上班中／不在班次」banner） ===
     val shifts: List<com.hualien.taxidriver.domain.model.ShiftSlot> = emptyList(),
 
@@ -128,6 +135,16 @@ data class HomeUiState(
 data class AutoLeftZoneInfo(
     val zoneName: String,
     val distanceMeters: Int,
+)
+
+/**
+ * 模組 4：no-show 拍照存證 — 暫存即將執行的 cancelNoShow 資訊
+ * 司機按「立即取消」→ 暫存此 → UI 跳相機 → 拍完上傳 → 再執行 cancelNoShow
+ */
+data class PendingNoShowCancel(
+    val orderId: String,
+    val driverId: String,
+    val waitedMinutes: Int,
 )
 
 /**
@@ -1008,8 +1025,13 @@ class HomeViewModel : ViewModel() {
 
     /**
      * 司機手動立刻標記客人未到（不等倒數）
+     *
+     * 模組 4 改動：cancelNoShow API 不再立即執行 — 改成設 pendingNoShowEvidence state、
+     * UI 看到此 state 跳 CameraCapture 全屏，司機拍完照才呼叫 uploadEvidenceAndCancel
+     * 真的執行取消。倒數自動取消（5min 到）走舊路徑、不強制拍照。
      */
     fun cancelNoShowNow(orderId: String, driverId: String) {
+        // 取消倒數 timer（但 UI 別清，等拍照完才完整 clear）
         noShowWaitingJob?.cancel()
         noShowWaitingJob = null
 
@@ -1017,25 +1039,81 @@ class HomeViewModel : ViewModel() {
             ((System.currentTimeMillis() - startedAt) / 60000).toInt()
         } ?: 0
 
-        _uiState.value = _uiState.value.copy(noShowCancelling = true)
+        _uiState.value = _uiState.value.copy(
+            pendingNoShowEvidence = PendingNoShowCancel(orderId, driverId, waitedMin),
+            noShowEvidenceError = null,
+        )
+    }
+
+    /**
+     * 司機拍完照後上傳存證 + 執行 cancelNoShow（two-step transaction）
+     * 任一步失敗 → 保留 pendingNoShowEvidence 讓司機可重試拍照 / 重試上傳
+     */
+    fun uploadEvidenceAndCancel(
+        photoFile: java.io.File,
+        gpsLat: Double?,
+        gpsLng: Double?,
+        notes: String? = null,
+    ) {
+        val pending = _uiState.value.pendingNoShowEvidence ?: return
+        _uiState.value = _uiState.value.copy(
+            noShowEvidenceUploading = true,
+            noShowEvidenceError = null,
+        )
         viewModelScope.launch {
-            repository.cancelNoShow(orderId, driverId, waitedMin)
+            // Step 1: 上傳照片存證
+            val uploadResult = repository.uploadNoShowEvidence(
+                orderId = pending.orderId,
+                driverId = pending.driverId,
+                photoFile = photoFile,
+                gpsLat = gpsLat,
+                gpsLng = gpsLng,
+                waitedMinutes = pending.waitedMinutes,
+                notes = notes,
+            )
+            if (uploadResult.isFailure) {
+                _uiState.value = _uiState.value.copy(
+                    noShowEvidenceUploading = false,
+                    noShowEvidenceError = "上傳失敗：${uploadResult.exceptionOrNull()?.message}",
+                )
+                return@launch
+            }
+            android.util.Log.d("NoShow", "✓ 照片存證上傳成功 (evidenceId=${uploadResult.getOrNull()?.evidenceId})")
+
+            // Step 2: 真正執行 cancelNoShow
+            repository.cancelNoShow(pending.orderId, pending.driverId, pending.waitedMinutes)
                 .onSuccess {
                     _uiState.value = _uiState.value.copy(
                         currentOrder = null,
                         noShowWaitingStartedAt = null,
                         noShowRemainingSeconds = null,
                         noShowCancelling = false,
+                        pendingNoShowEvidence = null,
+                        noShowEvidenceUploading = false,
+                        noShowEvidenceError = null,
                         driverStatus = DriverAvailability.AVAILABLE
                     )
                 }
                 .onFailure { err ->
+                    // 照片已上傳但取消失敗 → 留 state 讓司機看到錯誤、可重試
                     _uiState.value = _uiState.value.copy(
-                        noShowCancelling = false,
-                        error = "取消失敗：${err.message}"
+                        noShowEvidenceUploading = false,
+                        noShowEvidenceError = "照片已存但取消訂單失敗：${err.message}（請重試）",
                     )
                 }
         }
+    }
+
+    /**
+     * 司機在拍照頁按「返回」取消整個拍照流程
+     * 不影響原 ARRIVED 狀態（恢復原本「等候中」/ 正常 ARRIVED 畫面）
+     */
+    fun dismissNoShowEvidence() {
+        _uiState.value = _uiState.value.copy(
+            pendingNoShowEvidence = null,
+            noShowEvidenceUploading = false,
+            noShowEvidenceError = null,
+        )
     }
 
     /**

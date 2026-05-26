@@ -3,6 +3,9 @@ package com.hualien.taxidriver.data.repository
 import com.hualien.taxidriver.data.remote.RetrofitClient
 import com.hualien.taxidriver.data.remote.dto.RejectOrderRequest
 import com.hualien.taxidriver.domain.model.Order
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * 訂單Repository
@@ -140,6 +143,51 @@ class OrderRepository {
             }
         } catch (e: Exception) {
             Result.failure(Exception("網路錯誤：${e.message}"))
+        }
+    }
+
+    /**
+     * 模組 4：上傳「找不到客人」拍照存證
+     * 必須在 cancelNoShow 之前呼叫；後端會驗 order.status === 'ARRIVED'
+     */
+    suspend fun uploadNoShowEvidence(
+        orderId: String,
+        driverId: String,
+        photoFile: java.io.File,
+        gpsLat: Double?,
+        gpsLng: Double?,
+        waitedMinutes: Int?,
+        notes: String?,
+    ): Result<com.hualien.taxidriver.data.remote.dto.NoShowEvidenceResponse> {
+        return try {
+            val mediaType = "image/jpeg".toMediaTypeOrNull()
+            val requestFile = photoFile.asRequestBody(mediaType)
+            val photoPart = okhttp3.MultipartBody.Part.createFormData("photo", photoFile.name, requestFile)
+            val plainText = "text/plain".toMediaTypeOrNull()
+            val driverIdPart = driverId.toRequestBody(plainText)
+            val latPart = gpsLat?.toString()?.toRequestBody(plainText)
+            val lngPart = gpsLng?.toString()?.toRequestBody(plainText)
+            val waitedPart = waitedMinutes?.toString()?.toRequestBody(plainText)
+            val notesPart = notes?.takeIf { it.isNotBlank() }?.toRequestBody(plainText)
+
+            val response = apiService.uploadNoShowEvidence(
+                orderId = orderId,
+                photo = photoPart,
+                driverId = driverIdPart,
+                gpsLat = latPart,
+                gpsLng = lngPart,
+                waitedMinutes = waitedPart,
+                notes = notesPart,
+            )
+            val body = response.body()
+            if (response.isSuccessful && body != null) {
+                Result.success(body)
+            } else {
+                val errBody = response.errorBody()?.string() ?: "上傳失敗：${response.code()}"
+                Result.failure(Exception(errBody))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("拍照上傳網路錯誤：${e.message}"))
         }
     }
 

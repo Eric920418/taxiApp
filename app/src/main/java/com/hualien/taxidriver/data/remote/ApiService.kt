@@ -149,6 +149,22 @@ interface ApiService {
     ): Response<Unit>
 
     /**
+     * 模組 4：「找不到客人」拍照存證
+     * 必須在 cancelNoShow 之前呼叫；後端會驗 order.status === 'ARRIVED'
+     */
+    @Multipart
+    @POST("orders/{orderId}/no-show-evidence")
+    suspend fun uploadNoShowEvidence(
+        @Path("orderId") orderId: String,
+        @Part photo: okhttp3.MultipartBody.Part,
+        @Part("driverId") driverId: okhttp3.RequestBody,
+        @Part("gpsLat") gpsLat: okhttp3.RequestBody?,
+        @Part("gpsLng") gpsLng: okhttp3.RequestBody?,
+        @Part("waitedMinutes") waitedMinutes: okhttp3.RequestBody?,
+        @Part("notes") notes: okhttp3.RequestBody?
+    ): Response<NoShowEvidenceResponse>
+
+    /**
      * 司機請 LINE 客人重發上車位置 — 推播 Flex card + LIFF deep link
      * 限制：訂單 source 必須 LINE，且 status 在 ACCEPTED 或 ARRIVED
      */

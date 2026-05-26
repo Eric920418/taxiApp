@@ -1284,6 +1284,83 @@ fun HomeScreen(
                 )
             }
         }
+
+        // ====== 模組 4：no-show 拍照存證全屏覆蓋 ======
+        // 司機按「立即取消」→ pendingNoShowEvidence 非 null → 跳全屏相機
+        // 拍完照後 viewModel.uploadEvidenceAndCancel(file, gps) → 上傳 + 真正取消訂單
+        uiState.pendingNoShowEvidence?.let { _ ->
+            val scope = rememberCoroutineScope()
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+                com.hualien.taxidriver.ui.components.CameraCapture(
+                    onImageCaptured = { uri ->
+                        scope.launch {
+                            // Uri → File（CameraCapture 寫到 context.cacheDir，URI 是 file://）
+                            val file: java.io.File? = when {
+                                uri.scheme == "file" -> uri.path?.let { java.io.File(it) }
+                                else -> uri.path?.let { java.io.File(it) }
+                            }
+                            if (file == null || !file.exists()) {
+                                Toast.makeText(context, "照片檔讀取失敗", Toast.LENGTH_LONG).show()
+                                return@launch
+                            }
+                            // GPS（lastLocation, 沒權限或失敗就 null）
+                            var lat: Double? = null
+                            var lng: Double? = null
+                            try {
+                                val fused = com.google.android.gms.location.LocationServices
+                                    .getFusedLocationProviderClient(context)
+                                @Suppress("MissingPermission")
+                                val loc = fused.lastLocation.await()
+                                lat = loc?.latitude
+                                lng = loc?.longitude
+                            } catch (e: Exception) {
+                                android.util.Log.w("NoShow", "取 GPS 失敗（不擋上傳）: ${e.message}")
+                            }
+                            viewModel.uploadEvidenceAndCancel(file, lat, lng)
+                        }
+                    },
+                    onClose = { viewModel.dismissNoShowEvidence() },
+                )
+
+                // 上傳中 loading overlay
+                if (uiState.noShowEvidenceUploading) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.75f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = Color.White, strokeWidth = 4.dp)
+                            Spacer(Modifier.height(16.dp))
+                            Text(
+                                "上傳存證中…",
+                                color = Color.White,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                // 錯誤訊息（拍照重來）
+                uiState.noShowEvidenceError?.let { err ->
+                    Card(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 80.dp, start = 16.dp, end = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "⚠️ $err",
+                            color = Color(0xFFC62828),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
