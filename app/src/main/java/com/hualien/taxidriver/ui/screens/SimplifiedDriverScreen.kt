@@ -205,9 +205,10 @@ fun SimplifiedDriverScreen(
                     OrderStatus.ON_TRIP -> currentOrder.destination?.address
                     else -> null
                 }
-                if (navDest != null) {
+                if (navDest != null && currentOrder != null) {
                     voiceAssistant.speak("正在開啟導航")
-                    // TODO: 實際開啟導航
+                    // 行程中且有目的地 → 導航到目的地（有停靠點走多點路線）；否則導航到上車點
+                    com.hualien.taxidriver.utils.NavigationUtils.startNavigation(context, currentOrder)
                 } else {
                     voiceAssistant.speak("沒有可導航的目的地")
                 }

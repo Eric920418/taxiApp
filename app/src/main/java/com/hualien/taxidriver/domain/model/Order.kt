@@ -165,7 +165,24 @@ data class Order(
      * 對司機特別重要 — 知道要幫忙下車 / 開後車廂 / 心理準備
      */
     @SerializedName("notes")
-    val notes: String? = null
+    val notes: String? = null,
+
+    // === 司機補行程資料（補目的地 / 中途停靠 / 備註）===
+
+    /**
+     * 中途停靠點清單（依 sequence 排序）。
+     * 司機載到客人後可在 App 補上多個停靠點，影響導航（多點路線）。
+     */
+    @SerializedName("waypoints")
+    val waypoints: List<Waypoint> = emptyList(),
+
+    /** 客人原始下車地點（建單時填的，可能為待確認）*/
+    @SerializedName("dropoffOriginal")
+    val dropoffOriginal: String? = null,
+
+    /** 司機補/改後的最終下車地點 */
+    @SerializedName("dropoffFinal")
+    val dropoffFinal: String? = null
 ) {
     /**
      * 取得狀態enum
@@ -310,3 +327,24 @@ data class Order(
         else -> ""
     }
 }
+
+/**
+ * 中途停靠點。
+ * 司機補行程資料時新增，依 sequence 排序，用於多點導航。
+ */
+data class Waypoint(
+    @SerializedName("sequence")
+    val sequence: Int = 0,
+
+    @SerializedName("address")
+    val address: String? = null,
+
+    @SerializedName("lat")
+    val lat: Double? = null,
+
+    @SerializedName("lng")
+    val lng: Double? = null,
+
+    @SerializedName("note")
+    val note: String? = null
+)

@@ -266,6 +266,47 @@ class OrderRepository {
     }
 
     /**
+     * 司機補行程資料（補/改目的地、補備註、中途停靠點）
+     *
+     * 三種更新至少帶一種，可同時帶；錯誤完整透傳給 UI 顯示。
+     */
+    suspend fun driverUpdateOrder(
+        orderId: String,
+        driverId: String,
+        dest: com.hualien.taxidriver.data.remote.dto.DriverUpdateDest? = null,
+        specialNotes: String? = null,
+        waypoints: List<com.hualien.taxidriver.data.remote.dto.DriverUpdateWaypoint>? = null,
+        reason: String? = null,
+    ): Result<com.hualien.taxidriver.data.remote.dto.DriverUpdateResponse> {
+        return try {
+            val response = apiService.driverUpdateOrder(
+                orderId = orderId,
+                request = com.hualien.taxidriver.data.remote.dto.DriverUpdateRequest(
+                    driverId = driverId,
+                    dest = dest,
+                    specialNotes = specialNotes,
+                    waypoints = waypoints,
+                    reason = reason,
+                )
+            )
+            val body = response.body()
+            if (response.isSuccessful && body != null && body.success) {
+                Result.success(body)
+            } else {
+                // 完整透傳後端錯誤訊息（{ error }）
+                val errBody = response.errorBody()?.string()
+                val errMsg = errBody
+                    ?.let { runCatching { com.google.gson.Gson().fromJson(it, com.hualien.taxidriver.data.remote.dto.DriverUpdateResponse::class.java)?.error }.getOrNull() }
+                    ?: body?.error
+                    ?: "補行程資料失敗：HTTP ${response.code()}"
+                Result.failure(Exception(errMsg))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("網路錯誤：${e.message}"))
+        }
+    }
+
+    /**
      * 提交車資
      */
     suspend fun submitFare(

@@ -46,11 +46,13 @@ import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.ui.components.DiscountPreferenceSheetContent
 import com.hualien.taxidriver.ui.components.FareDialog
+import com.hualien.taxidriver.ui.components.PlaceSelectionDialog
 import com.hualien.taxidriver.ui.components.QueueZoneSheetContent
 import com.hualien.taxidriver.ui.components.MiniVoiceChatButton
 import com.hualien.taxidriver.ui.components.RatingDialog
 import com.hualien.taxidriver.ui.components.OrderTagRow
 import com.hualien.taxidriver.ui.components.VoiceChatPanel
+import com.hualien.taxidriver.utils.NavigationUtils
 import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
@@ -145,6 +147,12 @@ fun HomeScreen(
     // v1.5.1：聯絡客人 dialog（ARRIVED 找不到人時用）
     var showContactPassengerDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    // 司機補行程資料：地點選擇 dialog 模式（"destination" / "waypoint" / null）
+    var placeDialogMode by remember { mutableStateOf<String?>(null) }
+    // 選好停靠點後、送出前先填 note 的暫存（LatLng + address）
+    var pendingWaypoint by remember { mutableStateOf<Triple<Double, Double, String>?>(null) }
+    // 補/改備註 dialog
+    var showNotesDialog by remember { mutableStateOf(false) }
     val queueSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val discountSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val sheetScope = rememberCoroutineScope()
@@ -502,6 +510,46 @@ fun HomeScreen(
                             }
                         }
 
+                        // ===== 3a. 中途停靠點（依 sequence 顯示）=====
+                        if (currentOrder.waypoints.isNotEmpty()) {
+                            currentOrder.waypoints.sortedBy { it.sequence }.forEachIndexed { idx, wp ->
+                                Row(
+                                    verticalAlignment = Alignment.Top,
+                                    modifier = Modifier.padding(bottom = 12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Place,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFB8C00),
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "停靠 ${idx + 1}",
+                                            fontSize = 18.sp,
+                                            color = SubText
+                                        )
+                                        Text(
+                                            text = wp.address ?: "未提供地址",
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = DarkText,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (!wp.note.isNullOrBlank()) {
+                                            Text(
+                                                text = "📝 ${wp.note}",
+                                                fontSize = 16.sp,
+                                                color = Color(0xFFE65100)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // ===== 3. 目的地 =====
                         currentOrder.destination?.let { dest ->
                             Row(
@@ -750,39 +798,90 @@ fun HomeScreen(
                             }
                         }
 
-                        // 電話訂單：目的地確認按鈕
-                        // 雙重檢查：Order.destinationConfirmed（後端來的）+ UiState set（client-side override，
-                        // 後端目前沒持久化此欄位，WebSocket 重推會蓋掉本地 flag，所以用 set 兜底）
-                        if (currentOrder.needsDestinationConfirmation()
-                            && !uiState.confirmedDestinationOrderIds.contains(currentOrder.orderId)
+                        // ===== 司機補行程資料（補/改目的地、新增停靠、備註）=====
+                        // 接單後的訂單才顯示（ACCEPTED / ARRIVED / ON_TRIP）
+                        if (currentOrder.status in listOf(
+                                OrderStatus.ACCEPTED, OrderStatus.ARRIVED, OrderStatus.ON_TRIP
+                            )
                         ) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Text(
-                                        text = "電話訂單 - 請確認目的地",
-                                        fontSize = 14.sp,
-                                        color = Color(0xFFE65100),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Button(
-                                        onClick = { viewModel.confirmDestination(currentOrder.orderId) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFF4CAF50)
-                                        ),
-                                        shape = RoundedCornerShape(12.dp)
+                            // 目的地未補時醒目提示
+                            if (currentOrder.destination == null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                                    border = BorderStroke(2.dp, Color(0xFFFF9800)),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("確認目的地", fontSize = 16.sp)
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = Color(0xFFE65100),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "尚未設定目的地，請向客人詢問後補上",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE65100)
+                                        )
                                     }
                                 }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // 補/改目的地
+                                Button(
+                                    onClick = { placeDialogMode = "destination" },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    enabled = !uiState.isLoading,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        if (currentOrder.destination == null) "補目的地" else "修改目的地",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                // 新增中途停靠
+                                Button(
+                                    onClick = { placeDialogMode = "waypoint" },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    enabled = !uiState.isLoading,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFB8C00)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.AddLocation, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text("加停靠", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { showNotesDialog = true },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                enabled = !uiState.isLoading,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(2.dp, Color(0xFF1976D2))
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF1976D2))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("補/改備註", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1976D2))
                             }
                         }
                     }
@@ -828,27 +927,10 @@ fun HomeScreen(
                             Text("撥打乘客", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         }
 
-                        // 開始導航
+                        // 開始導航（行程中且有目的地 → 導航到目的地，有停靠點則走多點路線；否則導航到上車點）
                         Button(
                             onClick = {
-                                val navTarget = if (currentOrder.status == OrderStatus.ON_TRIP) {
-                                    currentOrder.destination?.let { dest ->
-                                        "google.navigation:q=${dest.latitude},${dest.longitude}"
-                                    }
-                                } else {
-                                    "google.navigation:q=${currentOrder.pickup.latitude},${currentOrder.pickup.longitude}"
-                                }
-                                navTarget?.let { target ->
-                                    val uri = Uri.parse(target)
-                                    val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                                        setPackage("com.google.android.apps.maps")
-                                    }
-                                    try {
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "請先安裝Google Maps", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
+                                NavigationUtils.startNavigation(context, currentOrder)
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -1281,6 +1363,62 @@ fun HomeScreen(
                         )
                         showContactPassengerDialog = false
                     },
+                )
+            }
+        }
+
+        // ====== 司機補行程資料：地點選擇（補目的地 / 加停靠）======
+        placeDialogMode?.let { mode ->
+            uiState.currentOrder?.let { order ->
+                PlaceSelectionDialog(
+                    title = if (mode == "destination") "設定目的地" else "新增中途停靠",
+                    currentLocation = order.pickup.toLatLng(),
+                    onPlaceSelected = { latLng, address ->
+                        when (mode) {
+                            "destination" -> viewModel.updateDestination(
+                                order.orderId, address, latLng.latitude, latLng.longitude
+                            )
+                            "waypoint" -> {
+                                // 先填 note，再送出
+                                pendingWaypoint = Triple(latLng.latitude, latLng.longitude, address)
+                            }
+                        }
+                        placeDialogMode = null
+                    },
+                    onMapSelectionRequest = {
+                        // 本畫面無內嵌地圖選點，提示改用搜尋
+                        Toast.makeText(context, "請用搜尋輸入地點", Toast.LENGTH_SHORT).show()
+                        placeDialogMode = null
+                    },
+                    onDismiss = { placeDialogMode = null }
+                )
+            }
+        }
+
+        // ====== 停靠點備註輸入（選完地點後）======
+        pendingWaypoint?.let { (lat, lng, address) ->
+            uiState.currentOrder?.let { order ->
+                WaypointNoteDialog(
+                    address = address,
+                    onConfirm = { note ->
+                        viewModel.addWaypoint(order.orderId, address, lat, lng, note)
+                        pendingWaypoint = null
+                    },
+                    onDismiss = { pendingWaypoint = null }
+                )
+            }
+        }
+
+        // ====== 補/改備註 dialog ======
+        if (showNotesDialog) {
+            uiState.currentOrder?.let { order ->
+                NotesInputDialog(
+                    initialText = order.notes ?: "",
+                    onConfirm = { text ->
+                        viewModel.updateNotes(order.orderId, text)
+                        showNotesDialog = false
+                    },
+                    onDismiss = { showNotesDialog = false }
                 )
             }
         }
@@ -2136,6 +2274,89 @@ private fun ContactPassengerDialog(
             TextButton(onClick = onDismiss) {
                 Text("取消", fontSize = 16.sp)
             }
+        }
+    )
+}
+
+/**
+ * 中途停靠點備註輸入 — 選好停靠地點後填（可選）。
+ */
+@Composable
+private fun WaypointNoteDialog(
+    address: String,
+    onConfirm: (note: String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var note by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("停靠點備註", fontSize = 22.sp, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text(text = address, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = DarkText)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("可選填，例如「拿東西 5 分鐘」「樓下等」", fontSize = 14.sp, color = SubText)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("停靠備註（可不填）") },
+                    maxLines = 2
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(note.trim().ifBlank { null }) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFB8C00))
+            ) {
+                Text("加入停靠", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", fontSize = 16.sp) }
+        }
+    )
+}
+
+/**
+ * 補/改備註 dialog — 自由輸入。送出走 driver-update 的 special_notes。
+ */
+@Composable
+private fun NotesInputDialog(
+    initialText: String,
+    onConfirm: (text: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(initialText) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("📝 補/改備註", fontSize = 22.sp, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("給後台 / 行程紀錄的備註：", fontSize = 14.sp, color = SubText)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("輸入備註內容…") },
+                    maxLines = 4
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(text.trim()) },
+                enabled = text.trim().isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))
+            ) {
+                Text("儲存備註", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", fontSize = 16.sp) }
         }
     )
 }

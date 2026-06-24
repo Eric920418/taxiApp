@@ -2,7 +2,6 @@ package com.hualien.taxidriver.ui.screens
 
 import android.Manifest
 import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,7 +28,9 @@ import com.hualien.taxidriver.domain.model.DriverAvailability
 import com.hualien.taxidriver.domain.model.OrderStatus
 import com.hualien.taxidriver.service.LocationService
 import com.hualien.taxidriver.ui.components.FareDialog
+import com.hualien.taxidriver.ui.components.PlaceSelectionDialog
 import com.hualien.taxidriver.ui.components.RatingDialog
+import com.hualien.taxidriver.utils.NavigationUtils
 import com.hualien.taxidriver.utils.formatKilometers
 import com.hualien.taxidriver.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
@@ -70,6 +71,9 @@ fun SeniorFriendlyHomeScreen(
     // 車資對話框狀態
     var showFareDialog by remember { mutableStateOf(false) }
     var currentOrderIdForFare by remember { mutableStateOf<String?>(null) }
+
+    // 長輩版：補目的地地點選擇 dialog
+    var showDestinationDialog by remember { mutableStateOf(false) }
 
     // 位置權限
     var hasLocationPermission by remember { mutableStateOf(false) }
@@ -183,20 +187,29 @@ fun SeniorFriendlyHomeScreen(
                         showFareDialog = true
                     },
                     onNavigate = {
-                        val uri = Uri.parse(
-                            "google.navigation:q=${order.pickup.latitude},${order.pickup.longitude}"
-                        )
-                        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                            setPackage("com.google.android.apps.maps")
-                        }
-                        try {
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "請先安裝Google Maps", Toast.LENGTH_SHORT).show()
-                        }
+                        // 行程中且有目的地 → 導航到目的地（有停靠點走多點路線）；否則導航到上車點
+                        NavigationUtils.startNavigation(context, order)
                     },
                     isLoading = uiState.isLoading
                 )
+
+                // 長輩版：目的地未設定時，提供「補目的地」大按鈕
+                if (order.destination == null &&
+                    order.status in listOf(OrderStatus.ACCEPTED, OrderStatus.ARRIVED, OrderStatus.ON_TRIP)
+                ) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = { showDestinationDialog = true },
+                        modifier = Modifier.fillMaxWidth().height(72.dp),
+                        enabled = !uiState.isLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(28.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("補目的地", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(20.dp))
             }
@@ -323,6 +336,25 @@ fun SeniorFriendlyHomeScreen(
                 viewModel.submitRating(driverId, rating, comment)
             }
         )
+    }
+
+    // 長輩版：補目的地地點選擇
+    if (showDestinationDialog) {
+        uiState.currentOrder?.let { order ->
+            PlaceSelectionDialog(
+                title = "設定目的地",
+                currentLocation = order.pickup.toLatLng(),
+                onPlaceSelected = { latLng, address ->
+                    viewModel.updateDestination(order.orderId, address, latLng.latitude, latLng.longitude)
+                    showDestinationDialog = false
+                },
+                onMapSelectionRequest = {
+                    Toast.makeText(context, "請用搜尋輸入地點", Toast.LENGTH_SHORT).show()
+                    showDestinationDialog = false
+                },
+                onDismiss = { showDestinationDialog = false }
+            )
+        }
     }
 }
 

@@ -233,7 +233,15 @@ data class OrderDto(
     @SerializedName("callId")
     val callId: String? = null,
     @SerializedName("notes")
-    val notes: String? = null
+    val notes: String? = null,
+
+    // === 司機補行程資料 ===
+    @SerializedName("waypoints")
+    val waypoints: List<WaypointDto>? = null,
+    @SerializedName("dropoffOriginal")
+    val dropoffOriginal: String? = null,
+    @SerializedName("dropoffFinal")
+    val dropoffFinal: String? = null
 ) {
     /**
      * 將 ISO 8601 日期字串轉換為時間戳（毫秒）
@@ -332,10 +340,37 @@ data class OrderDto(
             customerPhone = customerPhone,
             destinationConfirmed = destinationConfirmed ?: false,
             callId = callId,
-            notes = notes
+            notes = notes,
+            waypoints = waypoints?.map { wp ->
+                com.hualien.taxidriver.domain.model.Waypoint(
+                    sequence = wp.sequence ?: 0,
+                    address = wp.address,
+                    lat = wp.lat,
+                    lng = wp.lng,
+                    note = wp.note
+                )
+            } ?: emptyList(),
+            dropoffOriginal = dropoffOriginal,
+            dropoffFinal = dropoffFinal
         )
     }
 }
+
+/**
+ * 中途停靠點 DTO（後端 camelCase）
+ */
+data class WaypointDto(
+    @SerializedName("sequence")
+    val sequence: Int? = null,
+    @SerializedName("address")
+    val address: String? = null,
+    @SerializedName("lat")
+    val lat: Double? = null,
+    @SerializedName("lng")
+    val lng: Double? = null,
+    @SerializedName("note")
+    val note: String? = null
+)
 
 /**
  * 詳細位置信息（包含地址）

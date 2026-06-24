@@ -131,6 +131,17 @@ interface ApiService {
     ): Response<OrderDto>
 
     /**
+     * 司機補行程資料（補/改目的地、補備註、中途停靠點）
+     * 三種更新至少帶一種，可同時帶。
+     * 失敗：400（狀態不對/沒帶欄位）/ 403（非指派司機）/ 404 / 500 + { error }
+     */
+    @PATCH("orders/{orderId}/driver-update")
+    suspend fun driverUpdateOrder(
+        @Path("orderId") orderId: String,
+        @Body request: DriverUpdateRequest
+    ): Response<DriverUpdateResponse>
+
+    /**
      * 司機等候中：推播 LINE 提醒客人（剩 remainingMinutes 分鐘自動取消）
      */
     @POST("orders/{orderId}/notify-waiting")

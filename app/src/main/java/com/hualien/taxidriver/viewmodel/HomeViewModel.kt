@@ -642,6 +642,151 @@ class HomeViewModel : ViewModel() {
         }
     }
 
+    // ==================== 司機補行程資料 ====================
+
+    /**
+     * 把後端 driver-update 回傳的訂單，併入 _uiState 對應的 Order
+     * （只覆蓋目的地 / 確認狀態 / 下車地點 / 備註 / 停靠點，其它欄位保留原值）
+     */
+    private fun applyDriverUpdate(updated: com.hualien.taxidriver.data.remote.dto.DriverUpdateOrder) {
+        val state = _uiState.value
+        val isQueued = state.queuedOrder?.orderId == updated.orderId
+        val target = when {
+            state.currentOrder?.orderId == updated.orderId -> state.currentOrder
+            isQueued -> state.queuedOrder
+            else -> null
+        } ?: return
+
+        val mergedDestination = updated.destination?.let {
+            com.hualien.taxidriver.domain.model.Location(
+                latitude = it.lat,
+                longitude = it.lng,
+                address = it.address
+            )
+        } ?: target.destination
+
+        val mergedWaypoints = updated.waypoints?.map { wp ->
+            com.hualien.taxidriver.domain.model.Waypoint(
+                sequence = wp.sequence ?: 0,
+                address = wp.address,
+                lat = wp.lat,
+                lng = wp.lng,
+                note = wp.note
+            )
+        } ?: target.waypoints
+
+        val mergedOrder = target.copy(
+            destination = mergedDestination,
+            destinationConfirmed = updated.destinationConfirmed ?: target.destinationConfirmed,
+            dropoffOriginal = updated.dropoffOriginal ?: target.dropoffOriginal,
+            dropoffFinal = updated.dropoffFinal ?: target.dropoffFinal,
+            notes = updated.specialNotes ?: target.notes,
+            waypoints = mergedWaypoints
+        )
+
+        _uiState.value = if (isQueued) {
+            state.copy(queuedOrder = mergedOrder, isLoading = false, error = null)
+        } else {
+            state.copy(
+                currentOrder = mergedOrder,
+                // 補了目的地後也視為已確認，避免「確認目的地」按鈕又跳出來
+                confirmedDestinationOrderIds = state.confirmedDestinationOrderIds + updated.orderId,
+                isLoading = false,
+                error = null
+            )
+        }
+    }
+
+    /**
+     * 補/改目的地 — 司機載到客人後在 App 選目的地
+     */
+    fun updateDestination(orderId: String, address: String, lat: Double, lng: Double) {
+        val driverId = currentDriverId ?: run {
+            _uiState.value = _uiState.value.copy(error = "尚未登入司機帳號")
+            return
+        }
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            repository.driverUpdateOrder(
+                orderId = orderId,
+                driverId = driverId,
+                dest = com.hualien.taxidriver.data.remote.dto.DriverUpdateDest(address = address, lat = lat, lng = lng),
+            ).onSuccess { resp ->
+                resp.order?.let { applyDriverUpdate(it) }
+                    ?: run { _uiState.value = _uiState.value.copy(isLoading = false, error = null) }
+                android.util.Log.d("HomeViewModel", "✅ 目的地已更新: $address")
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(isLoading = false, error = err.message ?: "目的地更新失敗")
+            }
+        }
+    }
+
+    /**
+     * 新增中途停靠點 — 送出「既有 waypoints + 新點」整組陣列
+     */
+    fun addWaypoint(orderId: String, address: String, lat: Double, lng: Double, note: String?) {
+        val driverId = currentDriverId ?: run {
+            _uiState.value = _uiState.value.copy(error = "尚未登入司機帳號")
+            return
+        }
+        val order = when (orderId) {
+            _uiState.value.currentOrder?.orderId -> _uiState.value.currentOrder
+            _uiState.value.queuedOrder?.orderId -> _uiState.value.queuedOrder
+            else -> null
+        } ?: return
+
+        // 既有停靠點（依 sequence）+ 新點，全部送給後端
+        val merged = order.waypoints
+            .sortedBy { it.sequence }
+            .mapNotNull { wp ->
+                val a = wp.address ?: return@mapNotNull null
+                val la = wp.lat ?: return@mapNotNull null
+                val ln = wp.lng ?: return@mapNotNull null
+                com.hualien.taxidriver.data.remote.dto.DriverUpdateWaypoint(address = a, lat = la, lng = ln, note = wp.note)
+            } + com.hualien.taxidriver.data.remote.dto.DriverUpdateWaypoint(
+                address = address, lat = lat, lng = lng, note = note?.takeIf { it.isNotBlank() }
+            )
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            repository.driverUpdateOrder(
+                orderId = orderId,
+                driverId = driverId,
+                waypoints = merged,
+            ).onSuccess { resp ->
+                resp.order?.let { applyDriverUpdate(it) }
+                    ?: run { _uiState.value = _uiState.value.copy(isLoading = false, error = null) }
+                android.util.Log.d("HomeViewModel", "✅ 已新增中途停靠: $address")
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(isLoading = false, error = err.message ?: "新增停靠點失敗")
+            }
+        }
+    }
+
+    /**
+     * 補/改備註（special_notes）
+     */
+    fun updateNotes(orderId: String, text: String) {
+        val driverId = currentDriverId ?: run {
+            _uiState.value = _uiState.value.copy(error = "尚未登入司機帳號")
+            return
+        }
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            repository.driverUpdateOrder(
+                orderId = orderId,
+                driverId = driverId,
+                specialNotes = text,
+            ).onSuccess { resp ->
+                resp.order?.let { applyDriverUpdate(it) }
+                    ?: run { _uiState.value = _uiState.value.copy(isLoading = false, error = null) }
+                android.util.Log.d("HomeViewModel", "✅ 備註已更新")
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(isLoading = false, error = err.message ?: "備註更新失敗")
+            }
+        }
+    }
+
     /**
      * 連接WebSocket（司機上線）
      * 優化版：防止重複連接

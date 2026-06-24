@@ -30,3 +30,4 @@ app/src/main/assets/adi-registration.properties
 
 # Play Store 上架素材（截圖 / 圖示，避免 repo 變肥）
 play-store-assets/
+.gstack/
