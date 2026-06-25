@@ -70,6 +70,10 @@ data class Order(
     @SerializedName("etaToPickup")
     val etaToPickup: Int? = null,
 
+    /** 此 offer 是否為「排班(queue)派來的單」；在排班中收到時 App 自動接、不跳確認 */
+    @SerializedName("queueDispatch")
+    val queueDispatch: Boolean = false,
+
     /** 上車點到目的地的距離（公里），無目的地則為 null */
     @SerializedName("tripDistance")
     val tripDistance: Double? = null,

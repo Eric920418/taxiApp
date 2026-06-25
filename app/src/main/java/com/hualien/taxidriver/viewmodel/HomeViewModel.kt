@@ -273,6 +273,15 @@ class HomeViewModel : ViewModel() {
                         return@collect
                     }
 
+                    // 排班自動接單：在排班中收到「排班區的單」(queueDispatch) → 直接自動接、不跳確認卡
+                    val autoAcceptDriverId = currentDriverId
+                    if (order.status == OrderStatus.OFFERED && order.queueDispatch &&
+                        _uiState.value.myQueueStatus?.inQueue == true && autoAcceptDriverId != null) {
+                        android.util.Log.d("HomeViewModel", "🟢 排班中・自動接單(免確認): ${order.orderId}")
+                        acceptOrder(order.orderId, autoAcceptDriverId, currentDriverName ?: "")
+                        return@collect
+                    }
+
                     // 1+1 疊單：若目前主訂單為 ON_TRIP / ARRIVED / ACCEPTED 進行中，
                     // 新推送的訂單視為「下一單」（疊單），塞到 queuedOrder 不蓋主訂單
                     val existingOrder = _uiState.value.currentOrder
