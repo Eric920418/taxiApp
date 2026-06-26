@@ -59,6 +59,14 @@ data class Driver(
     /** 車隊統一折扣金額；null = 此司機未綁車隊 */
     @SerializedName("fleetDefaultDiscountAmount")
     val fleetDefaultDiscountAmount: Int? = null,
+
+    /**
+     * 完成訂單後自動排班開關：
+     * 開啟時，司機每趟訂單完成會依當下 GPS 自動排入所在排班區（不在任何區/休息離線則不排）。
+     * 排班區只在「完成訂單」或「手動開始排班」時判斷一次，之後不隨 GPS 換區。
+     */
+    @SerializedName("autoQueueAfterTrip")
+    val autoQueueAfterTrip: Boolean = false,
 )
 
 /**

@@ -219,6 +219,15 @@ interface ApiService {
     ): Response<UpdateDiscountResponse>
 
     /**
+     * 更新「完成訂單後自動排班」開關
+     */
+    @PATCH("drivers/{driverId}/auto-queue")
+    suspend fun updateAutoQueueAfterTrip(
+        @Path("driverId") driverId: String,
+        @Body request: UpdateAutoQueueRequest
+    ): Response<Unit>
+
+    /**
      * 上傳車資結算
      * 返回 OrderDto 來處理 ISO 8601 日期格式
      */

@@ -1,7 +1,25 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.6.0（beta45）| 更新日期：2026-05-27
+> 版本：v1.6.4（beta49）| 更新日期：2026-06-26
+
+## 📝 最新更新（2026-06-26）— 司機「完成訂單後自動排班」開關（v1.6.4 / beta49）
+
+### Context
+司機完成一趟訂單後，原本要手動再按「開始排班」才會進排班區。新增司機自控開關「完成訂單後自動排班」：開啟後每趟完成依當下 GPS 自動排入所在排班區（最高派單權重）；關閉維持自由狀態。核心原則：**排班區只在「完成訂單」或「手動按開始排班」時用 GPS 判斷一次，之後不因 GPS 漂移自動換區**。
+
+### 後端（HualienTaxiServer）
+- **Migration 032** `drivers.auto_queue_after_trip BOOLEAN DEFAULT false`（純加欄位、冪等）。
+- **`orders.ts maybeAutoRequeueAfterTrip(driverId)`**：把原本掛在 `PATCH /:orderId/status`、無開關又對 App 完成路徑是死碼的 auto-requeue 抽成 helper，加開關閘門（OFF→no-op、不動既有 entry；ON→同區保留／跨區 LEFT+INSERT／不在任何區退出）。`handleSubmitFare`（App 正常完成路徑）與 `PATCH /:orderId/status` DONE 都呼叫同一 helper。
+- **守門**：`PATCH /drivers/:id/status` 切 `OFFLINE/REST` 時一併 `LEFT` 掉 ACTIVE 排班（`left_reason=DRIVER_OFFLINE/REST`），使「休息/離線不排班」持續成立。
+- **`GET /drivers/:id`** 回應加 `autoQueueAfterTrip`；新增 **`PATCH /drivers/:id/auto-queue { enabled }`**。
+
+### Android Driver App (v1.6.4)
+- `Driver.autoQueueAfterTrip`、`UpdateAutoQueueRequest`、`ApiService.updateAutoQueueAfterTrip`。
+- `HomeViewModel.setAutoQueueAfterTrip(enabled)`（樂觀更新 + 失敗 rollback、錯誤完整顯示在前端）；`getDriverInfo` 載入旗標到 `HomeUiState.autoQueueAfterTrip`。
+- 排班 bottom sheet（`QueueZoneSheetContent`）頂部加 `Switch`「完成訂單後自動排班」。
+- 排班區穩定性不變：`refreshQueue` / `QueueFraudChecker` 維持「離區只退出、不換區」。
+- `versionCode 48→49, versionName 1.6.3→1.6.4`。
 
 ## 📝 最新更新（2026-05-27）— 模組 4：司機「立即取消」強制拍照存證
 

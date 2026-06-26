@@ -125,7 +125,10 @@ data class HomeUiState(
     // === GoGoCha 抽成接受度（司機願意被平台抽最高 N%）===
     val maxAcceptableDiscountAmount: Int = 0,
     val fleetPartnerName: String? = null,
-    val fleetDefaultDiscountAmount: Int? = null
+    val fleetDefaultDiscountAmount: Int? = null,
+
+    /** 完成訂單後自動排班開關（司機自控；ON = 每趟完成依 GPS 自動排入所在排班區） */
+    val autoQueueAfterTrip: Boolean = false
 )
 
 /**
@@ -1474,6 +1477,10 @@ class HomeViewModel : ViewModel() {
 
                     // 刷新今日統計
                     loadTodayStats(driverId)
+
+                    // 刷新排班狀態：若「完成訂單後自動排班」開啟，後端已在 submit-fare 內自動排入，
+                    // 這裡重抓 my-status 讓 UI 立即反映（不必等 30s 輪詢）
+                    refreshQueue()
                 }
                 .onFailure { error ->
                     android.util.Log.e("HomeViewModel", "❌ 車資提交失敗: ${error.message}")
@@ -1771,12 +1778,44 @@ class HomeViewModel : ViewModel() {
                             maxAcceptableDiscountAmount = driver.maxAcceptableDiscountAmount,
                             fleetPartnerName = driver.fleetPartnerName,
                             fleetDefaultDiscountAmount = driver.fleetDefaultDiscountAmount,
+                            autoQueueAfterTrip = driver.autoQueueAfterTrip,
                         )
                         android.util.Log.d("HomeViewModel", "✅ 班次：${driver.shifts.size}段，折扣接受度：${driver.maxAcceptableDiscountAmount} 元")
                     }
                 }
             } catch (e: Exception) {
                 android.util.Log.w("HomeViewModel", "⚠️ 司機資訊載入失敗（不影響其他功能）：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 切換「完成訂單後自動排班」開關（樂觀更新；失敗 rollback + 把完整錯誤塞 error 顯示在前端）
+     */
+    fun setAutoQueueAfterTrip(enabled: Boolean) {
+        val driverId = currentDriverId ?: return
+        val prev = _uiState.value.autoQueueAfterTrip
+        // 樂觀更新 UI
+        _uiState.value = _uiState.value.copy(autoQueueAfterTrip = enabled)
+        viewModelScope.launch {
+            try {
+                val res = com.hualien.taxidriver.data.remote.RetrofitClient.apiService
+                    .updateAutoQueueAfterTrip(
+                        driverId,
+                        com.hualien.taxidriver.data.remote.dto.UpdateAutoQueueRequest(enabled)
+                    )
+                if (!res.isSuccessful) {
+                    val msg = res.errorBody()?.string() ?: "HTTP ${res.code()}"
+                    _uiState.value = _uiState.value.copy(
+                        autoQueueAfterTrip = prev,
+                        error = "更新自動排班開關失敗：$msg"
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    autoQueueAfterTrip = prev,
+                    error = "更新自動排班開關失敗：${e.message}"
+                )
             }
         }
     }

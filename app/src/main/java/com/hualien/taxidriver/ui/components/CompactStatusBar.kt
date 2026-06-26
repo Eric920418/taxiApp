@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -18,6 +19,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -37,6 +39,8 @@ import com.hualien.taxidriver.domain.model.QueueZone
 internal fun QueueZoneSheetContent(
     zones: List<QueueZone>,
     myStatus: QueueMyStatus?,
+    autoQueueAfterTrip: Boolean,
+    onToggleAutoQueue: (Boolean) -> Unit,
     onJoin: (zoneId: String) -> Unit,
     onLeave: () -> Unit,
 ) {
@@ -63,6 +67,39 @@ internal fun QueueZoneSheetContent(
             color = Color(0xFF666666),
         )
         Spacer(modifier = Modifier.height(12.dp))
+
+        // 完成訂單後自動排班開關（司機自控；排班區只在完成訂單/手動排班時判斷一次，之後不隨 GPS 換區）
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "完成訂單後自動排班",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1565C0),
+                    )
+                    Text(
+                        text = "開啟後，每趟完成會依你目前位置自動排入該區；不在任何排班區則維持自由。",
+                        fontSize = 12.sp,
+                        color = Color(0xFF666666),
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Switch(
+                    checked = autoQueueAfterTrip,
+                    onCheckedChange = onToggleAutoQueue,
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
 
         if (inQueue) {
             Button(

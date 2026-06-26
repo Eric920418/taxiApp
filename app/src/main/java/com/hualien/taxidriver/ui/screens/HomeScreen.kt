@@ -1271,6 +1271,8 @@ fun HomeScreen(
                 QueueZoneSheetContent(
                     zones = uiState.queueZones,
                     myStatus = uiState.myQueueStatus,
+                    autoQueueAfterTrip = uiState.autoQueueAfterTrip,
+                    onToggleAutoQueue = { enabled -> viewModel.setAutoQueueAfterTrip(enabled) },
                     onJoin = { zoneId ->
                         try {
                             @Suppress("MissingPermission")
