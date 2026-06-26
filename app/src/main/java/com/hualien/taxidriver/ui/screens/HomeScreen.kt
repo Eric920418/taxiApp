@@ -914,17 +914,18 @@ fun HomeScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(56.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = ActionBlue),
+                            colors = ButtonDefaults.buttonColors(containerColor = ActionBlue, contentColor = Color.White),
                             shape = RoundedCornerShape(12.dp),
                             enabled = callPhone != null
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Phone,
                                 contentDescription = null,
-                                modifier = Modifier.size(22.dp)
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("撥打乘客", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("撥打乘客", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
 
                         // 開始導航（行程中且有目的地 → 導航到目的地，有停靠點則走多點路線；否則導航到上車點）
@@ -935,16 +936,17 @@ fun HomeScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(56.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = ActionBlue),
+                            colors = ButtonDefaults.buttonColors(containerColor = ActionBlue, contentColor = Color.White),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Navigation,
                                 contentDescription = null,
-                                modifier = Modifier.size(22.dp)
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("開始導航", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("開始導航", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
                     }
 
