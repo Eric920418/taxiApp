@@ -45,6 +45,7 @@ fun PlaceSelectionDialog(
     val coroutineScope = rememberCoroutineScope()
 
     var isLoadingDetails by remember { mutableStateOf(false) }
+    var errorText by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss
@@ -96,26 +97,38 @@ fun PlaceSelectionDialog(
                     onPlaceSelected = { prediction ->
                         coroutineScope.launch {
                             isLoadingDetails = true
+                            errorText = null
                             try {
                                 if (prediction.placeId.startsWith("local_")) {
                                     // ★ 本地地標：直接從本地 DB 取座標，不呼叫 Google API
                                     val localDetails = HualienLocalAddressDB.getDetailsByLocalId(prediction.placeId)
-                                    localDetails?.latLng?.let { latLng ->
+                                    val latLng = localDetails?.latLng
+                                    if (latLng != null) {
                                         val fullAddress = localDetails.address.ifEmpty { prediction.fullText }
                                         onPlaceSelected(latLng, fullAddress)
                                         onDismiss()
+                                    } else {
+                                        errorText = "找不到此地標的座標，請改用「在地圖上選擇」"
                                     }
                                 } else {
                                     // Google 地點：走原有 API 流程
                                     val result = placesService.getPlaceDetails(prediction.placeId)
                                     result.onSuccess { details ->
-                                        details.latLng?.let { latLng ->
+                                        val latLng = details.latLng
+                                        if (latLng != null) {
                                             val fullAddress = details.address.ifEmpty { prediction.fullText }
                                             onPlaceSelected(latLng, fullAddress)
                                             onDismiss()
+                                        } else {
+                                            errorText = "查不到該地點的座標，請改用「在地圖上選擇」"
                                         }
+                                    }.onFailure { e ->
+                                        // 補上漏掉的失敗處理：把錯誤完整顯示，避免卡 spinner 或無聲失敗
+                                        errorText = "查詢地點失敗：${e.message ?: "未知錯誤"}"
                                     }
                                 }
+                            } catch (e: Exception) {
+                                errorText = "查詢地點發生錯誤：${e.message ?: "未知錯誤"}"
                             } finally {
                                 isLoadingDetails = false
                             }
@@ -143,6 +156,16 @@ fun PlaceSelectionDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+
+                // 錯誤訊息（所有錯誤完整顯示在前端）
+                errorText?.let { msg ->
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))

@@ -1,9 +1,26 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.6.7（beta52）| 更新日期：2026-06-29
+> 版本：v1.6.8（beta53）| 更新日期：2026-06-29
 
-## 🚨 最新更新（2026-06-29）— 修正 1.6.5 接單後全司機閃退（v1.6.7 / beta52）
+## 🛠️ 最新更新（2026-06-29）— 修正「司機輸入住址閃退」+ Places 防護（v1.6.8 / beta53）
+
+### 事故
+司機按「補目的地 / 修改目的地 / 中途停靠」**輸入住址時 App 直接閃退**。Play 崩潰簽章 `com.google.android.gms.common.api.j` → `places.internal.zziq.zza`（**無任何 App 自有框** = Google Places SDK 的 async Task 在 main looper 丟出未捕捉的 `ApiException`）。
+
+### 根因
+`PlacesApiService` 在 `init` 直接 `Places.initialize` + `createClient`、`getApiKey` 無防護：金鑰缺失/無效（release build `MAPS_API_KEY` 注入失敗時為 `""`）或 metaData 為 null，會在 **Compose 主執行緒**丟例外；即使建立成功，後續 autocomplete/fetchPlace 的 Task 失敗也可能在 main looper 無從捕捉 → 閃退。
+
+### 修正（App-only，無後端、無 migration）
+- **`PlacesApiService.kt`**：`placesClient` 改 nullable；`init` 整段 try-catch、**金鑰為空白就完全不初始化**（杜絕註定失敗的 async Task）；`getApiKey` 全程 try-catch + metaData null 防護；新增 `isAvailable`；`searchPlaces`/`getPlaceDetails` 在 client 為 null 時直接回 `Result.failure`，不解參考。
+- **`PlaceSelectionDialog.kt`**：補上漏掉的 `.onFailure`、座標為 null 的處理，錯誤完整顯示在 dialog（符合「所有錯誤完整顯示在前端」）。
+- **`PlaceSearchBar.kt`**：Places 不可用時自動降級到既有在地地標 DB，並顯示「線上地址搜尋暫停，改用在地地標資料」。
+- `versionCode 52→53, versionName 1.6.7→1.6.8`。
+
+### 後續（已規劃，分階段）
+LINE 叫車「司機聯絡客人 phone-aware（有電話就打、沒有就發 LINE）」+「找不到客人導向公共地標會合」+「LIFF 建單留電話」為 Stage 2-4，待本版出版後接續。
+
+## 🚨 修正 1.5/1.6.5 接單後全司機閃退（v1.6.7 / beta52）
 
 ### 事故
 1.6.5（背景接單）推上 production 後，**司機接一單就「屢次停止運作」反覆閃退（crash loop）**。經 Play Developer Reporting API 抓回崩潰堆疊定位：

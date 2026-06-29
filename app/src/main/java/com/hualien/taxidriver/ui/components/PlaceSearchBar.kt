@@ -134,6 +134,16 @@ fun PlaceSearchBar(
             )
         }
 
+        // 線上 Places 不可用（金鑰缺失/初始化失敗）→ 已降級到在地地標，讓使用者知道而非無聲
+        if (!placesService.isAvailable) {
+            Text(
+                text = "線上地址搜尋暫停，改用在地地標資料",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+
         // 搜尋建議列表
         if (showSuggestions && predictions.isNotEmpty()) {
             Card(

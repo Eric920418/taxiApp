@@ -20,7 +20,13 @@ import kotlin.coroutines.resumeWithException
  */
 class PlacesApiService(context: Context) {
 
-    private val placesClient: PlacesClient
+    // ⚠️ nullable：Places 初始化 / createClient 在金鑰缺失或無效時會丟例外。
+    // 舊版直接在 init 丟 → 在 Compose 主執行緒炸掉（司機「輸入住址閃退」根因）。
+    // 改成失敗時為 null，呼叫端一律走 Result.failure 並降級到在地地標 DB。
+    private val placesClient: PlacesClient?
+
+    /** Places 線上服務是否可用（金鑰有效且 client 建立成功）。false → 呼叫端降級到在地地標。 */
+    val isAvailable: Boolean get() = placesClient != null
 
     companion object {
         private const val TAG = "PlacesApiService"
@@ -33,22 +39,40 @@ class PlacesApiService(context: Context) {
     }
 
     init {
-        // 初始化 Places API
-        if (!Places.isInitialized()) {
-            Places.initialize(context.applicationContext, getApiKey(context))
+        // 任何初始化失敗都讓 placesClient = null（降級），絕不把例外丟進 Compose/main → 閃退
+        placesClient = try {
+            val apiKey = getApiKey(context)
+            if (apiKey.isBlank()) {
+                // 金鑰缺失：完全不初始化，避免之後發出註定失敗的 async Task
+                //（Places SDK 的 Task 例外在 main looper 無從捕捉 → 直接閃退）
+                Log.e(TAG, "Places API 金鑰缺失（manifest com.google.android.geo.API_KEY 為空），停用線上地址搜尋，降級到在地地標")
+                null
+            } else {
+                if (!Places.isInitialized()) {
+                    Places.initialize(context.applicationContext, apiKey)
+                }
+                Places.createClient(context)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Places 初始化失敗，停用線上地址搜尋，降級到在地地標", e)
+            null
         }
-        placesClient = Places.createClient(context)
     }
 
     /**
-     * 從 AndroidManifest.xml 讀取 API Key
+     * 從 AndroidManifest.xml 讀取 API Key（任何讀取失敗都回空字串，不丟例外）
      */
     private fun getApiKey(context: Context): String {
-        val appInfo = context.packageManager.getApplicationInfo(
-            context.packageName,
-            android.content.pm.PackageManager.GET_META_DATA
-        )
-        return appInfo.metaData.getString("com.google.android.geo.API_KEY") ?: ""
+        return try {
+            val appInfo = context.packageManager.getApplicationInfo(
+                context.packageName,
+                android.content.pm.PackageManager.GET_META_DATA
+            )
+            appInfo.metaData?.getString("com.google.android.geo.API_KEY") ?: ""
+        } catch (e: Exception) {
+            Log.e(TAG, "讀取 Places API 金鑰失敗", e)
+            ""
+        }
     }
 
     /**
@@ -68,6 +92,12 @@ class PlacesApiService(context: Context) {
                 return@suspendCancellableCoroutine
             }
 
+            // 服務未啟用（金鑰缺失/初始化失敗）→ 直接 failure，呼叫端降級到在地地標
+            val client = placesClient ?: run {
+                continuation.resume(Result.failure(IllegalStateException("Places 服務未啟用（金鑰缺失或初始化失敗），改用在地地標")))
+                return@suspendCancellableCoroutine
+            }
+
             // 每次搜尋都建立新的 session token，避免連續不同搜尋被 Google 合併
             val currentToken = AutocompleteSessionToken.newInstance()
 
@@ -84,7 +114,7 @@ class PlacesApiService(context: Context) {
 
             val request = requestBuilder.build()
 
-            placesClient.findAutocompletePredictions(request)
+            client.findAutocompletePredictions(request)
                 .addOnSuccessListener { response ->
                     val predictions = response.autocompletePredictions.map { prediction ->
                         PlacePrediction(
@@ -117,6 +147,11 @@ class PlacesApiService(context: Context) {
     suspend fun getPlaceDetails(placeId: String): Result<PlaceDetails> =
         suspendCancellableCoroutine { continuation ->
             try {
+                val client = placesClient ?: run {
+                    continuation.resume(Result.failure(IllegalStateException("Places 服務未啟用（金鑰缺失或初始化失敗）")))
+                    return@suspendCancellableCoroutine
+                }
+
                 val placeFields = listOf(
                     Place.Field.ID,
                     Place.Field.NAME,
@@ -129,7 +164,7 @@ class PlacesApiService(context: Context) {
 
                 val request = FetchPlaceRequest.builder(placeId, placeFields).build()
 
-                placesClient.fetchPlace(request)
+                client.fetchPlace(request)
                     .addOnSuccessListener { response ->
                         val place = response.place
                         val details = PlaceDetails(
