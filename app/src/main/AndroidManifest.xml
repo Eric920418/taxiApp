@@ -29,6 +29,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- 全螢幕接單通知（背景/鎖屏時拉起 IncomingOrderActivity） -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -57,6 +60,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 全螢幕接單頁（背景/鎖屏/被殺時由 FCM 或 LocationService 的 full-screen intent 拉起） -->
+        <activity
+            android:name=".IncomingOrderActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.HualienTaxiDriver" />
 
         <!-- 定位前景服務 -->
         <service

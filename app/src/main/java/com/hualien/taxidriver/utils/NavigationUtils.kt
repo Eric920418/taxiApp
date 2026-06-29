@@ -23,7 +23,7 @@ object NavigationUtils {
      */
     fun buildNavigationUri(order: Order, forcePickup: Boolean = false): Uri {
         val dest = order.destination
-        val waypoints = order.waypoints
+        val waypoints = order.waypoints.orEmpty()
             .filter { it.lat != null && it.lng != null }
             .sortedBy { it.sequence }
 

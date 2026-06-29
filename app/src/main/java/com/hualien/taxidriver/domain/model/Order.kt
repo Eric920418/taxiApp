@@ -176,9 +176,14 @@ data class Order(
     /**
      * 中途停靠點清單（依 sequence 排序）。
      * 司機載到客人後可在 App 補上多個停靠點，影響導航（多點路線）。
+     *
+     * ⚠️ 必須宣告為 nullable：WebSocket 推來的訂單走 `gson.fromJson(json, Order::class.java)`
+     * 直接反序列化，會「繞過」Kotlin constructor 的 `= emptyList()` 預設值；當後端 payload
+     * 沒帶 waypoints 欄位時，這裡實際會是 null。若宣告成非 null 會在 `.isEmpty()` / `.copy()`
+     * 觸發 NullPointerException（1.6.5 接單後全司機閃退的根因）。所有使用點一律 `.orEmpty()`。
      */
     @SerializedName("waypoints")
-    val waypoints: List<Waypoint> = emptyList(),
+    val waypoints: List<Waypoint>? = null,
 
     /** 客人原始下車地點（建單時填的，可能為待確認）*/
     @SerializedName("dropoffOriginal")

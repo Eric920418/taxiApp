@@ -748,7 +748,7 @@ class HomeViewModel : ViewModel() {
         } ?: return
 
         // 既有停靠點（依 sequence）+ 新點，全部送給後端
-        val merged = order.waypoints
+        val merged = order.waypoints.orEmpty()
             .sortedBy { it.sequence }
             .mapNotNull { wp ->
                 val a = wp.address ?: return@mapNotNull null
@@ -993,6 +993,34 @@ class HomeViewModel : ViewModel() {
                     error = "狀態更新異常：${e.message}"
                 )
             }
+        }
+    }
+
+    /**
+     * 用 orderId 補抓訂單 → 顯示「可接單」卡片（點通知 / 背景開回 App 時恢復）。
+     * 只在仍 OFFERED/WAITING 時跳卡片；已被接走/進行中/結束則不蓋現有主單。
+     */
+    fun fetchOrderById(orderId: String) {
+        viewModelScope.launch {
+            if (_uiState.value.currentOrder?.orderId == orderId) return@launch
+            repository.getOrderById(orderId)
+                .onSuccess { order ->
+                    if (order.status == OrderStatus.OFFERED || order.status == OrderStatus.WAITING) {
+                        val existing = _uiState.value.currentOrder
+                        val safeToShow = existing == null ||
+                            existing.status == OrderStatus.OFFERED ||
+                            existing.status == OrderStatus.WAITING
+                        if (safeToShow) {
+                            _uiState.value = _uiState.value.copy(currentOrder = order, error = null)
+                            android.util.Log.d("HomeViewModel", "✅ fetchOrderById 補抓並顯示卡片：$orderId")
+                        }
+                    } else {
+                        android.util.Log.d("HomeViewModel", "fetchOrderById：訂單 $orderId 狀態 ${order.status}，不跳卡片")
+                    }
+                }
+                .onFailure { e ->
+                    android.util.Log.w("HomeViewModel", "fetchOrderById 失敗：${e.message}")
+                }
         }
     }
 

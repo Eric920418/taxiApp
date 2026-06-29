@@ -338,6 +338,22 @@ class OrderRepository {
     }
 
     /**
+     * 取得單一訂單（背景接單補抓用 — 點通知/開回 App 時用 orderId 補抓該單顯示卡片）
+     */
+    suspend fun getOrderById(orderId: String): Result<Order> {
+        return try {
+            val response = apiService.getOrder(orderId)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!.toDomainOrder())
+            } else {
+                Result.failure(Exception("取得訂單失敗：HTTP ${response.code()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("網路錯誤：${e.message}"))
+        }
+    }
+
+    /**
      * 取得訂單列表
      */
     suspend fun getOrders(driverId: String): Result<List<Order>> {

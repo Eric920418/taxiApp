@@ -165,6 +165,16 @@ fun HomeScreen(
         viewModel.refreshQueue()  // 載入排班區 + 自己的排班狀態
     }
 
+    // 通知/全螢幕接單頁帶進來的 orderId → 補抓該單顯示卡片（背景接單根治）
+    val pendingOrderId = com.hualien.taxidriver.utils.IncomingOrderRoute.pendingOrderId
+    LaunchedEffect(pendingOrderId) {
+        val oid = pendingOrderId
+        if (!oid.isNullOrBlank()) {
+            viewModel.fetchOrderById(oid)
+            com.hualien.taxidriver.utils.IncomingOrderRoute.pendingOrderId = null
+        }
+    }
+
     // 排班中時：每 30 秒重新拉一次 server 最新 zone 資料 + 用 GPS 校驗是否仍在區域內
     // 觸發情境：admin 改 zone 中心點/半徑/名稱、司機自己離開區域沒退出
     // inQueue 變 false（自己退出 / server cron 踢出）時自動停止 polling
@@ -511,8 +521,10 @@ fun HomeScreen(
                         }
 
                         // ===== 3a. 中途停靠點（依 sequence 顯示）=====
-                        if (currentOrder.waypoints.isNotEmpty()) {
-                            currentOrder.waypoints.sortedBy { it.sequence }.forEachIndexed { idx, wp ->
+                        // waypoints 可能為 null（WS Gson 反序列化未帶此欄位）→ 一律 orEmpty 防 NPE
+                        val orderWaypoints = currentOrder.waypoints.orEmpty()
+                        if (orderWaypoints.isNotEmpty()) {
+                            orderWaypoints.sortedBy { it.sequence }.forEachIndexed { idx, wp ->
                                 Row(
                                     verticalAlignment = Alignment.Top,
                                     modifier = Modifier.padding(bottom = 12.dp)
