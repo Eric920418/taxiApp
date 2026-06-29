@@ -351,6 +351,29 @@ fun SimplifiedDriverScreen(
                         fontWeight = FontWeight.Medium,
                     )
                 }
+
+                // 找不到客人 → 請後端建議附近公共地標當會合點（同步推給客人 + 顯示給司機）
+                OutlinedButton(
+                    onClick = {
+                        viewModel.requestRelocation(currentOrderForRelocate.orderId, suggestLandmark = true)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Place,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "找不到客人？建議會合地標",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
 
             // 中間：智能大按鈕

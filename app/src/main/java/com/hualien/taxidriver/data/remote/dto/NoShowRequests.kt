@@ -26,5 +26,37 @@ data class CancelNoShowRequest(
  */
 data class RequestRelocationRequest(
     @SerializedName("driverId")
-    val driverId: String
+    val driverId: String,
+
+    /** true = 找不到客人，請後端附上附近公共地標當會合點 */
+    @SerializedName("suggestLandmark")
+    val suggestLandmark: Boolean = false
+)
+
+/**
+ * request-relocation 回應：含可選的建議會合地標
+ */
+data class RequestRelocationResponse(
+    @SerializedName("success")
+    val success: Boolean = false,
+
+    @SerializedName("message")
+    val message: String? = null,
+
+    @SerializedName("meetupLandmark")
+    val meetupLandmark: MeetupLandmarkDto? = null
+)
+
+data class MeetupLandmarkDto(
+    @SerializedName("name")
+    val name: String = "",
+
+    @SerializedName("address")
+    val address: String? = null,
+
+    @SerializedName("lat")
+    val lat: Double? = null,
+
+    @SerializedName("lng")
+    val lng: Double? = null
 )

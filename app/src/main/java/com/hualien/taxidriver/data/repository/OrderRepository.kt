@@ -220,16 +220,22 @@ class OrderRepository {
     suspend fun requestRelocation(
         orderId: String,
         driverId: String,
-    ): Result<Unit> {
+        suggestLandmark: Boolean = false,
+    ): Result<com.hualien.taxidriver.data.remote.dto.RequestRelocationResponse> {
         return try {
             val response = apiService.requestRelocation(
                 orderId = orderId,
                 request = com.hualien.taxidriver.data.remote.dto.RequestRelocationRequest(
-                    driverId = driverId
+                    driverId = driverId,
+                    suggestLandmark = suggestLandmark
                 )
             )
-            if (response.isSuccessful) Result.success(Unit)
-            else {
+            if (response.isSuccessful) {
+                Result.success(
+                    response.body()
+                        ?: com.hualien.taxidriver.data.remote.dto.RequestRelocationResponse(success = true)
+                )
+            } else {
                 val errBody = response.errorBody()?.string()
                 Result.failure(Exception(errBody ?: "請求失敗：${response.message()}"))
             }

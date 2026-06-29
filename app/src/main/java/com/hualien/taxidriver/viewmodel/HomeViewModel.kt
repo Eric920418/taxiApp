@@ -595,17 +595,23 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    fun requestRelocation(orderId: String) {
+    fun requestRelocation(orderId: String, suggestLandmark: Boolean = false) {
         viewModelScope.launch {
             val driverId = currentDriverId ?: run {
                 _uiState.value = _uiState.value.copy(error = "尚未登入司機帳號")
                 return@launch
             }
-            val result = repository.requestRelocation(orderId, driverId)
+            val result = repository.requestRelocation(orderId, driverId, suggestLandmark)
             result.fold(
-                onSuccess = {
+                onSuccess = { resp ->
+                    val lm = resp.meetupLandmark
                     _uiState.value = _uiState.value.copy(
-                        error = "已通知客人重發位置，請等待回覆"
+                        error = if (lm != null && lm.name.isNotBlank()) {
+                            val addr = lm.address?.takeIf { it.isNotBlank() }?.let { "（$it）" } ?: ""
+                            "已通知客人，建議於「${lm.name}」會合$addr"
+                        } else {
+                            "已通知客人重發位置，請等待回覆"
+                        }
                     )
                 },
                 onFailure = { e ->

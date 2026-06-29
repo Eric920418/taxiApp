@@ -183,7 +183,7 @@ interface ApiService {
     suspend fun requestRelocation(
         @Path("orderId") orderId: String,
         @Body request: RequestRelocationRequest
-    ): Response<Unit>
+    ): Response<RequestRelocationResponse>
 
     /**
      * 司機聯絡客人（找不到人時用）

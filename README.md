@@ -1,9 +1,24 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.6.8（beta53）| 更新日期：2026-06-29
+> 版本：v1.6.9（beta54）| 更新日期：2026-06-29
 
-## 🛠️ 最新更新（2026-06-29）— 修正「司機輸入住址閃退」+ Places 防護（v1.6.8 / beta53）
+## 📞 最新更新（2026-06-29）— LINE 叫車「聯絡客人 phone-aware + 找不到客人會合地標」（v1.6.9 / beta54）
+
+### 背景
+LINE 叫車的客人多半沒留電話（`passengers.phone` 是 `LINE_<userId>` 佔位、`orders.customer_phone` 為 NULL），司機「回撥客人」常常做不到。本版讓聯絡客人變「**有電話就打、沒有就發 LINE**」，並新增「**找不到客人 → 導向公共地標會合**」。
+
+### 改動（跨 App + 後端；無 DB migration）
+- **後端 `/contact-passenger`（phone-aware）**：LINE 分支先驗 `customer_phone` / `passengers.phone` 是否為真台灣手機（`^09\d{8}$`、非 `LINE_` 佔位）→ 有 → 回 `{channel:'TEL'}` 讓 App 撥號；沒有 → 維持 LINE Bot 推訊息。回傳號碼一律過 `maskCounterpartPhone`（production `RELAY_MASK_ENABLED` 未設＝顯示真號）。
+- **後端「找不到客人」**：擴充既有 LINE-only `request-relocation`，body 加 `suggestLandmark`。`HualienAddressDB.findNearestLandmark(lat,lng,800)`（in-memory haversine、排除禁止上車地標）找最近公共地標，附在 LINE Flex 卡（`relocateRequestCard` 新增「🚕 建議會合地點」區塊），並回傳 `meetupLandmark` 給司機端同步顯示。
+- **App**：`RequestRelocationRequest` 加 `suggestLandmark` + 新增 `RequestRelocationResponse`/`MeetupLandmarkDto`；`OrderRepository`/`HomeViewModel.requestRelocation` 帶旗標、顯示回傳地標；`SimplifiedDriverScreen` 在 LINE 單接單/到達時新增「找不到客人？建議會合地標」按鈕（既有「請客人重發上車位置」保留）。
+- App `channel:'TEL'` 自動撥號路徑沿用既有實作（`HomeViewModel.contactPassenger`），故「有電話就打」後端一上線即生效。
+- `versionCode 53→54, versionName 1.6.8→1.6.9`。
+
+### 後續（已規劃）
+Stage 4「LIFF 建單留電話」（選配、非必填，避免破壞長輩一鍵叫車 UX）待產品確認要收電話再做。
+
+## 🛠️ 修正「司機輸入住址閃退」+ Places 防護（v1.6.8 / beta53）
 
 ### 事故
 司機按「補目的地 / 修改目的地 / 中途停靠」**輸入住址時 App 直接閃退**。Play 崩潰簽章 `com.google.android.gms.common.api.j` → `places.internal.zziq.zza`（**無任何 App 自有框** = Google Places SDK 的 async Task 在 main looper 丟出未捕捉的 `ApiException`）。
