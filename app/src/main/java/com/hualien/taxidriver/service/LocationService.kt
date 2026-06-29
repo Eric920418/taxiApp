@@ -95,7 +95,7 @@ class LocationService : Service() {
                             lastWsConnectedTime = currentTime
                         } else {
                             val disconnectedMs = currentTime - lastWsConnectedTime
-                            if (disconnectedMs > 45_000) { // 45 秒（背景接單需更快重連）
+                            if (disconnectedMs > 120_000) { // 2 分鐘
                                 android.util.Log.w(TAG, "⚠️ WebSocket 斷線超過 ${disconnectedMs / 1000}s，觸發重連")
                                 driverId?.let { id ->
                                     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
@@ -144,26 +144,6 @@ class LocationService : Service() {
                     android.util.Log.d(TAG, "   更新間隔: ${config.updateInterval}ms")
                     currentConfig = config
                     applyLocationConfig(config)
-                }
-            }
-        }
-
-        // 背景接單根治：觀察 WS 新訂單，App 在背景（含鎖屏）時 post 全螢幕接單通知
-        // → 由 full-screen intent 拉起 IncomingOrderActivity。前景時不彈（交給 in-app 卡片）。
-        // 前景服務讓進程不死 → WS 單例在背景維持常連 → 此處能即時收到 order:offer。
-        // 與 FCM 同單由 IncomingOrderNotifier 以 orderId 去重。
-        serviceScope.launch {
-            webSocketManager.orderOffer.collectLatest { order ->
-                if (order != null &&
-                    order.status == com.hualien.taxidriver.domain.model.OrderStatus.OFFERED &&
-                    !com.hualien.taxidriver.utils.AppForeground.isForeground
-                ) {
-                    com.hualien.taxidriver.utils.IncomingOrderNotifier.showIncomingOrder(
-                        context = applicationContext,
-                        orderId = order.orderId,
-                        passengerName = order.passengerName,
-                        pickup = order.pickup.address,
-                    )
                 }
             }
         }

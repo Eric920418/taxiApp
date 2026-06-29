@@ -109,26 +109,15 @@ class TaxiFirebaseMessagingService : FirebaseMessagingService() {
 
         when (type) {
             TYPE_NEW_ORDER -> {
+                // 新訂單通知 - 使用高優先級
                 val passengerName = data["passengerName"] ?: "乘客"
                 val pickup = data["pickup"] ?: "未知地點"
-                if (!orderId.isNullOrBlank() && !com.hualien.taxidriver.utils.AppForeground.isForeground) {
-                    // 背景：全螢幕接單（鎖屏/螢幕關拉起 IncomingOrderActivity，否則 heads-up）
-                    // 註：此分支僅在 FCM 為 data-only 時於背景觸發；含 notification payload 時背景由系統渲染
-                    com.hualien.taxidriver.utils.IncomingOrderNotifier.showIncomingOrder(
-                        context = this,
-                        orderId = orderId,
-                        passengerName = passengerName,
-                        pickup = pickup,
-                    )
-                } else {
-                    // 前景：交給 in-app 卡片（WS）；保留 heads-up 當保險
-                    showOrderNotification(
-                        title = "新訂單！",
-                        body = "$passengerName 在 $pickup 叫車",
-                        orderId = orderId,
-                        isHighPriority = true
-                    )
-                }
+                showOrderNotification(
+                    title = "新訂單！",
+                    body = "$passengerName 在 $pickup 叫車",
+                    orderId = orderId,
+                    isHighPriority = true
+                )
             }
 
             TYPE_ORDER_CANCELLED -> {

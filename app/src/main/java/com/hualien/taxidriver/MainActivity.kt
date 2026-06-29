@@ -1,6 +1,5 @@
 package com.hualien.taxidriver
 
-import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -52,9 +51,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 通知/全螢幕頁帶進來的 orderId → 交給 HomeScreen 補抓單顯示卡片
-        handleOrderIntent(intent)
-
         // 初始化 RetrofitClient（必須在使用 API 之前調用）
         RetrofitClient.init(this)
 
@@ -87,29 +83,6 @@ class MainActivity : ComponentActivity() {
             HualienTaxiDriverTheme {
                 AppContent(dataStoreManager, roleManager)
             }
-        }
-    }
-
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleOrderIntent(intent)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        com.hualien.taxidriver.utils.AppForeground.isForeground = true
-    }
-
-    override fun onPause() {
-        super.onPause()
-        com.hualien.taxidriver.utils.AppForeground.isForeground = false
-    }
-
-    /** 從通知/全螢幕頁的 orderId extra 取單號，寫入中轉站給 HomeScreen 補抓 */
-    private fun handleOrderIntent(intent: Intent?) {
-        intent?.getStringExtra("orderId")?.takeIf { it.isNotBlank() }?.let {
-            com.hualien.taxidriver.utils.IncomingOrderRoute.pendingOrderId = it
         }
     }
 }

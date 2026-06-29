@@ -1,26 +1,7 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.6.5（beta50）| 更新日期：2026-06-27
-
-## 📝 最新更新（2026-06-27）— 背景接單根治：Uber 級全螢幕接單（v1.6.5 / beta50）
-
-### Context
-司機 App 切背景/螢幕關/被殺時收不到 WS `order:offer`，只剩通知鈴聲、沒卡片可接（FCM 通知帶的 orderId 過去 `MainActivity` 沒讀）。本次讓背景也能跳「全螢幕接單頁」直接接/拒。**純 App 改動**（後端 FCM 已 high-priority+data、`GET /orders/:id` 現成）。
-
-### 改動
-- **`IncomingOrderActivity`（新）**：全螢幕接單頁（`showWhenLocked`/`turnScreenOn`），抓 `getOrderById` 顯示卡片 + 大「接受/拒絕」+ 響鈴/倒數；接受→跳 `MainActivity` 進行程；已被接走/逾時→自動關閉。被殺後由 FCM 拉起時補 `RetrofitClient.init` + token 快取。
-- **`IncomingOrderNotifier`（新）**：FCM 與 LocationService 共用，post `setFullScreenIntent` 通知拉起 `IncomingOrderActivity`；以 orderId 去重。
-- **`LocationService`**：觀察 `WebSocketManager.orderOffer`，App 在背景（進程仍活）時 post 全螢幕通知（前景交給 in-app 卡片）；WS 重連門檻 120s→45s。前景服務維持進程不死→WS 單例背景常連。
-- **`TaxiFirebaseMessagingService`**：新訂單背景時走 `IncomingOrderNotifier`（full-screen）。
-- **`MainActivity`**：`onCreate`/`onNewIntent` 讀 `orderId` extra → `HomeViewModel.fetchOrderById` 補抓單顯示卡片（`IncomingOrderRoute` 中轉、`HomeScreen` 觀察）。
-- **`OrderRepository.getOrderById` / `HomeViewModel.fetchOrderById`（新）**：用 `getOrder(orderId)`，OFFERED 才跳卡片、不蓋進行中主單。
-- Manifest 加 `USE_FULL_SCREEN_INTENT` + `IncomingOrderActivity` 宣告；`AppForeground` 前景旗標。
-- `versionCode 49→50, versionName 1.6.4→1.6.5`。
-
-### 限制 / 注意
-- **被殺狀態的全螢幕**：需後端 FCM 改 data-only（含 `notification` payload 時背景不觸發 `onMessageReceived`）；目前被殺狀態仍走系統通知 + 點擊→卡片。背景但進程活著（最常見）已可全螢幕。
-- Android 14+ `USE_FULL_SCREEN_INTENT` 可能需使用者授權，否則降級 heads-up。OEM 省電殺進程需請司機關閉省電限制。
+> 版本：v1.6.4（beta49）| 更新日期：2026-06-26
 
 ## 📝 最新更新（2026-06-26）— 司機「完成訂單後自動排班」開關（v1.6.4 / beta49）
 
