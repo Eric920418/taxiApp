@@ -87,6 +87,9 @@ fun PlaceSearchBar(
                     predictions = localPredictions
                     showSuggestions = localPredictions.isNotEmpty()
                 }
+            } catch (e: Exception) {
+                // 最後防線：搜尋協程任何未預期例外都不得崩潰（打字時 Places 例外曾造成閃退）
+                android.util.Log.e("PlaceSearchBar", "搜尋協程例外，改用在地地標", e)
             } finally {
                 isSearching = false
             }

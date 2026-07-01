@@ -12,7 +12,6 @@ import com.google.android.libraries.places.api.net.FindAutocompletePredictionsRe
 import com.google.android.libraries.places.api.net.PlacesClient
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /**
  * Google Places API (New) 服務類
@@ -128,13 +127,15 @@ class PlacesApiService(context: Context) {
                     continuation.resume(Result.success(predictions))
                 }
                 .addOnFailureListener { exception ->
-                    Log.e(TAG, "地址搜尋失敗", exception)
-                    continuation.resumeWithException(exception)
+                    // ⚠️ 失敗回 Result.failure（不可 resumeWithException 丟例外）：
+                    // 呼叫端 PlaceSearchBar 打字協程沒 catch，丟例外會直接崩潰。回 failure → 降級在地地標。
+                    Log.e(TAG, "地址搜尋失敗（降級到在地地標）", exception)
+                    continuation.resume(Result.failure(exception))
                 }
 
         } catch (e: Exception) {
-            Log.e(TAG, "搜尋發生錯誤", e)
-            continuation.resumeWithException(e)
+            Log.e(TAG, "搜尋發生錯誤（降級到在地地標）", e)
+            continuation.resume(Result.failure(e))
         }
     }
 
@@ -179,13 +180,14 @@ class PlacesApiService(context: Context) {
                         continuation.resume(Result.success(details))
                     }
                     .addOnFailureListener { exception ->
+                        // 失敗回 Result.failure，不丟例外（呼叫端才能 onFailure 降級、不崩潰）
                         Log.e(TAG, "獲取地點詳情失敗", exception)
-                        continuation.resumeWithException(exception)
+                        continuation.resume(Result.failure(exception))
                     }
 
             } catch (e: Exception) {
                 Log.e(TAG, "獲取地點詳情發生錯誤", e)
-                continuation.resumeWithException(e)
+                continuation.resume(Result.failure(e))
             }
         }
 }

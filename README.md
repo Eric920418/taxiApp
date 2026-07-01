@@ -1,9 +1,22 @@
 # GoGoCha - 雙模式 Android App
 
 > **HualienTaxiDriver**（repo 名）/ **GoGoCha**（產品名）— 司機端 + 乘客端統一應用程式
-> 版本：v1.6.9（beta54）| 更新日期：2026-06-29
+> 版本：v1.6.10（beta55）| 更新日期：2026-07-01
 
-## 📞 最新更新（2026-06-29）— LINE 叫車「聯絡客人 phone-aware + 找不到客人會合地標」（v1.6.9 / beta54）
+## 🛠️ 最新更新（2026-07-01）— 修正「補目的地打字時閃退」（Places 失敗改降級不丟例外）（v1.6.10 / beta55）
+
+### 事故（1.6.8 沒修乾淨的補完）
+1.6.9 上 production 後，司機按「補目的地」**打字到一半就閃退**。讀碼定位根因：
+- `PlacesApiService.searchPlaces` 的 autocomplete 失敗路徑（`addOnFailureListener` + 外層 catch）用 **`resumeWithException`** → 讓 `searchPlaces`**丟例外**而非回 `Result.failure`；而 `PlaceSearchBar` 打字觸發的搜尋協程**只有 try/finally、沒 catch** → 打字時 Places Task 一失敗（`com.google.android.gms.common.api.j` ApiException）→ 未捕捉 → 崩潰。
+- **1.6.8 打偏**：只補了「金鑰缺失」路徑（`Result.failure`），沒改「Task 失敗」那兩條 `resumeWithException` → client 存在但 Task 失敗照丟例外。
+
+### 修正（App-only）
+- **`PlacesApiService`**：`searchPlaces` + `getPlaceDetails` 全部失敗路徑 `resumeWithException` → **`resume(Result.failure(e))`**，永不丟例外；呼叫端 `.onFailure` 一定觸發、降級到在地地標。移除已無用的 `resumeWithException` import。
+- **`PlaceSearchBar`**：搜尋協程加 `catch`（最後防線）。
+- **pickup null 防護**（同 waypoints 的 Gson 繞過類）：`HomeScreen`（訂單卡 address、電話單警告、對話框 currentLocation）、`SeniorFriendlyHomeScreen` 對 `currentOrder.pickup` 改安全存取，null 時 currentLocation 傳 null、address 顯示「未提供地址」。
+- `versionCode 54→55, versionName 1.6.9→1.6.10`。
+
+## 📞 LINE 叫車「聯絡客人 phone-aware + 找不到客人會合地標」（v1.6.9 / beta54）
 
 ### 背景
 LINE 叫車的客人多半沒留電話（`passengers.phone` 是 `LINE_<userId>` 佔位、`orders.customer_phone` 為 NULL），司機「回撥客人」常常做不到。本版讓聯絡客人變「**有電話就打、沒有就發 LINE**」，並新增「**找不到客人 → 導向公共地標會合**」。

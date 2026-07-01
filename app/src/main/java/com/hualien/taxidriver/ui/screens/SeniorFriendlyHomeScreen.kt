@@ -343,7 +343,7 @@ fun SeniorFriendlyHomeScreen(
         uiState.currentOrder?.let { order ->
             PlaceSelectionDialog(
                 title = "設定目的地",
-                currentLocation = order.pickup.toLatLng(),
+                currentLocation = order.pickup?.toLatLng(),
                 onPlaceSelected = { latLng, address ->
                     viewModel.updateDestination(order.orderId, address, latLng.latitude, latLng.longitude)
                     showDestinationDialog = false

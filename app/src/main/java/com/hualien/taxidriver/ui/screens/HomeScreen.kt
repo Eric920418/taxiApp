@@ -510,7 +510,7 @@ fun HomeScreen(
                                     color = SubText
                                 )
                                 Text(
-                                    text = currentOrder.pickup.address ?: "未提供地址",
+                                    text = currentOrder.pickup?.address ?: "未提供地址",
                                     fontSize = 22.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = DarkText,
@@ -753,8 +753,8 @@ fun HomeScreen(
 
                         // 電話訂單：上車地點未確認警告
                         val pickupUnclear = currentOrder.isPhoneOrder() &&
-                                (currentOrder.pickup.address?.contains("待確認") == true ||
-                                        currentOrder.pickup.address.isNullOrEmpty())
+                                (currentOrder.pickup?.address?.contains("待確認") == true ||
+                                        currentOrder.pickup?.address.isNullOrEmpty())
                         if (pickupUnclear) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Card(
@@ -1388,7 +1388,7 @@ fun HomeScreen(
             uiState.currentOrder?.let { order ->
                 PlaceSelectionDialog(
                     title = if (mode == "destination") "設定目的地" else "新增中途停靠",
-                    currentLocation = order.pickup.toLatLng(),
+                    currentLocation = order.pickup?.toLatLng(),
                     onPlaceSelected = { latLng, address ->
                         when (mode) {
                             "destination" -> viewModel.updateDestination(
